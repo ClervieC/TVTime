@@ -3,7 +3,13 @@
     "name": "TVTime",
     "slug": "TVTime",
     "version": "1.0.0",
+    "scheme": "tvtime",
     "orientation": "portrait",
+    "newArchEnabled": true,
+    "plugins": ["expo-router"],
+    "experiments": {
+      "typedRoutes": true
+    },
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
