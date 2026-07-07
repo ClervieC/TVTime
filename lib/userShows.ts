@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
+import { invalidateWatchedEpisodes } from "./showDataCache";
 
-export type ShowStatus = "watching" | "want_to_watch" | "watched" | "dropped";
+export type ShowStatus = "watching" | "want_to_watch" | "watched" | "dropped" | "paused";
 
 export interface UserShow {
   id: string;
@@ -187,6 +188,18 @@ export interface WatchedEpisode {
   times_watched: number;
 }
 
+export async function fetchEpisodeCount(userId?: string) {
+  const targetUserId = userId ?? (await supabase.auth.getUser()).data.user?.id;
+  if (!targetUserId) return 0;
+
+  const { count, error } = await supabase
+    .from("watched_episodes")
+    .select("id", { count: "exact", head: true })
+    .eq("user_id", targetUserId);
+  if (error) throw error;
+  return count ?? 0;
+}
+
 export async function fetchWatchedEpisode(episodeId: number) {
   const { data, error } = await supabase
     .from("watched_episodes")
@@ -202,6 +215,24 @@ export async function fetchWatchedEpisodes(showId: number) {
     .from("watched_episodes")
     .select("*")
     .eq("tvmaze_show_id", showId);
+  if (error) throw error;
+  return data as WatchedEpisode[];
+}
+
+// Global, paginated (across every followed show) history query — used to lazy
+// load "Watched history" a page at a time instead of pulling every episode
+// the user has ever watched into memory up front.
+export async function fetchWatchedEpisodesPage(offset: number, limit: number) {
+  const { data: userData } = await supabase.auth.getUser();
+  const userId = userData.user?.id;
+  if (!userId) return [];
+
+  const { data, error } = await supabase
+    .from("watched_episodes")
+    .select("*")
+    .eq("user_id", userId)
+    .order("watched_at", { ascending: false })
+    .range(offset, offset + limit - 1);
   if (error) throw error;
   return data as WatchedEpisode[];
 }
@@ -224,6 +255,7 @@ export async function setEpisodeWatched(params: {
       .eq("user_id", userId)
       .eq("tvmaze_episode_id", params.tvmaze_episode_id);
     if (error) throw error;
+    invalidateWatchedEpisodes(params.tvmaze_show_id);
     return null;
   }
 
@@ -243,6 +275,7 @@ export async function setEpisodeWatched(params: {
     .select()
     .single();
   if (error) throw error;
+  invalidateWatchedEpisodes(params.tvmaze_show_id);
   return data as WatchedEpisode;
 }
 
@@ -267,6 +300,7 @@ export async function setEpisodesWatched(
     { onConflict: "user_id,tvmaze_episode_id" }
   );
   if (error) throw error;
+  invalidateWatchedEpisodes(showId);
 }
 
 export async function bulkUpsertWatchedEpisodes(
@@ -296,6 +330,7 @@ export async function bulkUpsertWatchedEpisodes(
     );
     if (error) throw error;
   }
+  invalidateWatchedEpisodes(showId);
 }
 
 export async function rateEpisode(tvmazeEpisodeId: number, rating: number | null, feeling: string | null) {
@@ -314,5 +349,6 @@ export async function incrementRewatch(tvmazeEpisodeId: number, currentTimesWatc
     .select()
     .single();
   if (error) throw error;
+  invalidateWatchedEpisodes(data.tvmaze_show_id);
   return data as WatchedEpisode;
 }

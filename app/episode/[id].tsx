@@ -18,6 +18,7 @@ import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { getShow, getShowEpisodes, TVMazeEpisode, TVMazeShow } from "../../lib/tvmaze";
+import { getCachedEpisodes, getCachedShow, getCachedWatchedEpisodes } from "../../lib/showDataCache";
 import { fetchWatchedEpisodes, incrementRewatch, rateEpisode, setEpisodeWatched, WatchedEpisode } from "../../lib/userShows";
 import { useColors, radius, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
@@ -63,9 +64,9 @@ export default function EpisodeDetailScreen() {
       setLoading(true);
       hasScrolledToInitial.current = false;
       Promise.all([
-        showIdNum ? getShow(showIdNum) : Promise.resolve(null),
-        showIdNum ? getShowEpisodes(showIdNum) : Promise.resolve([]),
-        showIdNum ? fetchWatchedEpisodes(showIdNum) : Promise.resolve([]),
+        showIdNum ? getCachedShow(showIdNum, () => getShow(showIdNum)) : Promise.resolve(null),
+        showIdNum ? getCachedEpisodes(showIdNum, () => getShowEpisodes(showIdNum)) : Promise.resolve([]),
+        showIdNum ? getCachedWatchedEpisodes(showIdNum, () => fetchWatchedEpisodes(showIdNum)) : Promise.resolve([]),
       ]).then(([sh, eps, watchedList]) => {
         if (!active) return;
         setShow(sh);

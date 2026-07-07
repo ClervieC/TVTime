@@ -28,6 +28,7 @@ interface EpisodeRowProps {
   network?: string;
   daysAway?: number;
   dimmed?: boolean;
+  expandIcon?: "up" | "down";
   onToggleWatched: () => void;
   onRewatch?: () => void;
   onPress?: () => void;
@@ -51,6 +52,7 @@ export function EpisodeRow({
   network,
   daysAway,
   dimmed,
+  expandIcon,
   onToggleWatched,
   onRewatch,
   onPress,
@@ -77,7 +79,7 @@ export function EpisodeRow({
   // shown (not for upcoming/unaired episodes) and for episodes not already
   // watched — unwatching goes through the tap + rewatch-prompt flow instead.
   const swipeToWatchEnabled =
-    daysAway === undefined && time === undefined && !watched;
+    daysAway === undefined && time === undefined && !watched && !expandIcon;
 
   function renderRightActions(progress: SharedValue<number>) {
     const style = useAnimatedStyle(() => ({ opacity: progress.value }));
@@ -105,29 +107,32 @@ export function EpisodeRow({
   const row = (
     <Pressable onPressIn={onPressIn} onPressOut={onPressOut} onPress={openEpisode}>
       <Animated.View style={[styles.row, dimmed && styles.rowDimmed, { transform: [{ scale }] }]}>
-      {showImage ? (
-        <Image source={{ uri: showImage }} style={[styles.thumb, dimmed && styles.thumbDimmed]} />
-      ) : (
-        <View style={[styles.thumb, styles.thumbPlaceholder, dimmed && styles.thumbDimmed]} />
-      )}
+      <Pressable
+        style={styles.thumbWrap}
+        onPress={(e) => {
+          e.stopPropagation();
+          router.push(`/show/${showId}`);
+        }}
+      >
+        {showImage ? (
+          <Image source={{ uri: showImage }} style={[styles.thumb, dimmed && styles.thumbDimmed]} />
+        ) : (
+          <View style={[styles.thumb, styles.thumbPlaceholder, dimmed && styles.thumbDimmed]} />
+        )}
+      </Pressable>
       <View style={styles.info}>
-        <Pressable
-          style={[styles.showPill, dimmed && styles.showPillDimmed]}
-          onPress={(e) => {
-            e.stopPropagation();
-            router.push(`/show/${showId}`);
-          }}
-        >
-          <Text style={[styles.showPillText, dimmed && styles.textDimmed]} numberOfLines={1}>
-            {showName.toUpperCase()}
-          </Text>
-          <Ionicons name="chevron-forward" size={12} color={dimmed ? colors.textFaint : colors.text} />
-        </Pressable>
-        <Text style={[styles.episodeCode, dimmed && styles.textDimmed]}>
-          S{String(season).padStart(2, "0")} | E{String(number).padStart(2, "0")}
-          {extraEpisodes ? <Text style={styles.extraEpisodes}> +{extraEpisodes}</Text> : null}
+        <Text style={[styles.showNameMain, dimmed && styles.textDimmed]} numberOfLines={1}>
+          {showName}
         </Text>
-        <Text style={styles.episodeTitle} numberOfLines={1}>
+        <View style={styles.positionRow}>
+          <Text style={[styles.positionCode, dimmed && styles.textDimmed]}>
+            S{String(season).padStart(2, "0")} · E{String(number).padStart(2, "0")}
+          </Text>
+          {!!extraEpisodes && (
+            <Text style={styles.positionRemaining}>{t.episodeRow.remaining(extraEpisodes)}</Text>
+          )}
+        </View>
+        <Text style={[styles.episodeTitle, dimmed && styles.textDimmed]} numberOfLines={1}>
           {title}
         </Text>
         {!dimmed && (
@@ -162,6 +167,9 @@ export function EpisodeRow({
           {network && <Text style={styles.network}>{network}</Text>}
         </View>
       ) : (
+        // Grouped rows (expandIcon set) still need their own checkmark — the
+        // group only collapses the *other* episodes of that day, the first
+        // one shown on this row must stay individually markable.
         <View style={styles.checkCol}>
           <WatchedCheck
             watched={watched}
@@ -171,6 +179,14 @@ export function EpisodeRow({
             light={dimmed}
           />
         </View>
+      )}
+      {expandIcon && (
+        <Ionicons
+          name={expandIcon === "up" ? "chevron-up" : "chevron-down"}
+          size={16}
+          color={colors.textMuted}
+          style={styles.expandCorner}
+        />
       )}
       <Animated.View
         pointerEvents="none"
@@ -220,28 +236,20 @@ function createStyles(colors: Colors) {
     },
     swipeActionText: { color: "#fff", fontSize: 11, fontWeight: "800", textAlign: "center" },
     rowDimmed: { backgroundColor: "transparent", shadowOpacity: 0 },
-    thumb: { width: 88, alignSelf: "stretch", backgroundColor: colors.backgroundAlt },
+    thumbWrap: { width: 88, alignSelf: "stretch", position: "relative" },
+    thumb: { width: "100%", height: "100%", backgroundColor: colors.backgroundAlt },
     thumbDimmed: { opacity: 0.45 },
     thumbPlaceholder: { backgroundColor: colors.backgroundAlt },
-    info: { flex: 1, gap: 3, padding: 12 },
-    showPill: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 4,
-      alignSelf: "flex-start",
-      borderWidth: 1,
-      borderColor: colors.black,
-      borderRadius: radius.pill,
-      paddingHorizontal: 8,
-      paddingVertical: 2,
-      maxWidth: "100%",
-    },
-    showPillDimmed: { borderColor: colors.border },
+    info: { flex: 1, gap: 2, padding: 12, justifyContent: "center" },
     textDimmed: { color: colors.textFaint },
-    showPillText: { fontSize: 10, fontWeight: "800", color: colors.text },
-    episodeCode: { fontWeight: "800", fontSize: 15, color: colors.text, marginTop: 2 },
-    extraEpisodes: { fontWeight: "400", color: colors.textMuted },
-    episodeTitle: { color: colors.textMuted, fontSize: 13 },
+    // The three things that actually matter at a glance: which show, where
+    // you are in it, and how much is left — the episode's own title is
+    // secondary and shown smaller below.
+    showNameMain: { color: colors.text, fontSize: 15, fontWeight: "800" },
+    positionRow: { flexDirection: "row", alignItems: "baseline", gap: 8, marginTop: 1 },
+    positionCode: { color: colors.accent, fontSize: 13, fontWeight: "800" },
+    positionRemaining: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
+    episodeTitle: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
     badgeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
     badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
     badgeText: { fontSize: 9, fontWeight: "800", letterSpacing: 0.3 },
@@ -251,5 +259,6 @@ function createStyles(colors: Colors) {
     daysAwayNumber: { fontWeight: "800", fontSize: 24, color: colors.text },
     daysAwayLabel: { fontSize: 10, fontWeight: "700", color: colors.textMuted, marginTop: 1 },
     checkCol: { justifyContent: "center", paddingRight: 12 },
+    expandCorner: { position: "absolute", top: 10, right: 10 },
   });
 }

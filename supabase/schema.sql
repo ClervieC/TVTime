@@ -1,6 +1,9 @@
 -- Run this in the Supabase SQL editor for your project.
 
-create type show_status as enum ('watching', 'want_to_watch', 'watched', 'dropped');
+create type show_status as enum ('watching', 'want_to_watch', 'watched', 'dropped', 'paused');
+
+-- Run this instead if show_status already exists from a previous version of this schema:
+-- alter type show_status add value if not exists 'paused';
 
 create table if not exists public.user_shows (
   id uuid primary key default gen_random_uuid(),
@@ -74,6 +77,13 @@ create policy "Users manage their own watched episodes"
   for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- Lets episode-watched counts (TV time, episodes watched) show up on a
+-- user's public profile page, same spirit as the user_shows read policy above.
+create policy "Watched episodes are viewable by authenticated users"
+  on public.watched_episodes
+  for select
+  using (auth.role() = 'authenticated');
 
 create index if not exists watched_episodes_show_idx
   on public.watched_episodes (user_id, tvmaze_show_id);

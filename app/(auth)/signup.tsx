@@ -104,9 +104,11 @@ function createStyles(colors: Colors) {
     logo: { width: 96, height: 96, alignSelf: "center", marginBottom: 12 },
     title: { fontSize: 28, fontWeight: "800", color: colors.text, textAlign: "center", marginBottom: 32 },
     input: {
-      backgroundColor: colors.backgroundAlt,
+      backgroundColor: colors.surface,
       color: colors.text,
       borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
       padding: 14,
       marginBottom: 12,
       fontSize: 16,

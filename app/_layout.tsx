@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { AuthProvider, useAuth } from "../context/AuthContext";
 import { RewatchPromptProvider } from "../context/RewatchPromptContext";
+import { PreviousEpisodesPromptProvider } from "../context/PreviousEpisodesPromptContext";
 import { LanguageProvider } from "../lib/i18n";
 
 function RootNavigation() {
@@ -49,7 +50,9 @@ export default function RootLayout() {
           <LanguageProvider>
             <View style={{ flex: 1 }}>
               <RewatchPromptProvider>
-                <RootNavigation />
+                <PreviousEpisodesPromptProvider>
+                  <RootNavigation />
+                </PreviousEpisodesPromptProvider>
               </RewatchPromptProvider>
             </View>
           </LanguageProvider>

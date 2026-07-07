@@ -48,7 +48,14 @@ function CustomTabBar({ state, navigation }: TabBarProps) {
                 target: route.key,
                 canPreventDefault: true,
               });
-              if (!focused && !event.defaultPrevented) {
+              // Already on this tab — block the navigator's default action
+              // entirely so it doesn't reset/refocus the screen (which was
+              // re-triggering that screen's focus-effect data reload).
+              if (focused) {
+                event.preventDefault();
+                return;
+              }
+              if (!event.defaultPrevented) {
                 navigation.navigate(route.name);
               }
             }}

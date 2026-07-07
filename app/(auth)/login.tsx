@@ -1,5 +1,12 @@
 import { useMemo, useState } from "react";
-import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
+import {
+  View,
+  Text,
+  TextInput,
+  Pressable,
+  StyleSheet,
+  ActivityIndicator,
+} from "react-native";
 import { Image } from "expo-image";
 import { Link } from "expo-router";
 import { supabase } from "../../lib/supabase";
@@ -18,14 +25,21 @@ export default function LoginScreen() {
   async function handleLogin() {
     setError(null);
     setLoading(true);
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
     setLoading(false);
     if (error) setError(error.message);
   }
 
   return (
     <View style={styles.container}>
-      <Image source={require("../../assets/logo.png")} style={styles.logo} contentFit="contain" />
+      <Image
+        source={require("../../assets/logo.png")}
+        style={styles.logo}
+        contentFit="contain"
+      />
       <Text style={styles.subtitle}>{t.login.tagline}</Text>
 
       <TextInput
@@ -49,7 +63,11 @@ export default function LoginScreen() {
       {error && <Text style={styles.error}>{error}</Text>}
 
       <Pressable style={styles.button} onPress={handleLogin} disabled={loading}>
-        {loading ? <ActivityIndicator color={colors.onAccent} /> : <Text style={styles.buttonText}>{t.login.signIn}</Text>}
+        {loading ? (
+          <ActivityIndicator color={colors.onAccent} />
+        ) : (
+          <Text style={styles.buttonText}>{t.login.signIn}</Text>
+        )}
       </Pressable>
 
       <Link href="/(auth)/signup" style={styles.link}>
@@ -61,13 +79,30 @@ export default function LoginScreen() {
 
 function createStyles(colors: Colors) {
   return StyleSheet.create({
-    container: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: colors.background },
-    logo: { width: 160, height: 160, alignSelf: "center" },
-    subtitle: { fontSize: 16, color: colors.textMuted, textAlign: "center", marginBottom: 32 },
+    container: {
+      flex: 1,
+      justifyContent: "center",
+      padding: 24,
+      backgroundColor: colors.background,
+    },
+    logo: {
+      width: 160,
+      height: 160,
+      alignSelf: "center",
+      borderRadius: "35px",
+    },
+    subtitle: {
+      fontSize: 16,
+      color: colors.textMuted,
+      textAlign: "center",
+      marginBottom: 32,
+    },
     input: {
-      backgroundColor: colors.backgroundAlt,
+      backgroundColor: colors.surface,
       color: colors.text,
       borderRadius: radius.sm,
+      borderWidth: 1,
+      borderColor: colors.border,
       padding: 14,
       marginBottom: 12,
       fontSize: 16,

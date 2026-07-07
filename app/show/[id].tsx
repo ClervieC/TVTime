@@ -3,7 +3,8 @@ import { View, Text, ScrollView, Animated, StyleSheet, ActivityIndicator, Pressa
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { getShow, getShowEpisodes, TVMazeShow, TVMazeEpisode } from "../../lib/tvmaze";
+import { getShow, getShowCast, getShowEpisodes, CastMember, TVMazeShow, TVMazeEpisode } from "../../lib/tvmaze";
+import { getCachedEpisodes, getCachedShow, getCachedWatchedEpisodes } from "../../lib/showDataCache";
 import {
   addShowToList,
   createList,
@@ -25,6 +26,7 @@ import { useColors, radius, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
 import { useGrowIn, useFadeIn, useScalePress, useMountIn } from "../../lib/animations";
 import { WatchedCheck } from "../../components/WatchedCheck";
+import { usePreviousEpisodesPrompt } from "../../context/PreviousEpisodesPromptContext";
 
 function stripHtml(html: string | null) {
   if (!html) return "";
@@ -39,6 +41,7 @@ export default function ShowDetailScreen() {
   const [tab, setTab] = useState<"about" | "episodes">("episodes");
   const [show, setShow] = useState<TVMazeShow | null>(null);
   const [episodes, setEpisodes] = useState<TVMazeEpisode[]>([]);
+  const [cast, setCast] = useState<CastMember[]>([]);
   const [userShow, setUserShow] = useState<UserShow | null>(null);
   const [watched, setWatched] = useState<WatchedEpisode[]>([]);
   const [expandedSeason, setExpandedSeason] = useState<number | null>(null);
@@ -53,18 +56,21 @@ export default function ShowDetailScreen() {
   const underlineGrow = useGrowIn(tab);
   const contentFade = useFadeIn(!loading);
   const progressAnim = useRef(new Animated.Value(0)).current;
+  const askPreviousEpisodes = usePreviousEpisodesPrompt();
 
   const load = useCallback(async () => {
-    const [showData, episodeData, userShows, watchedData] = await Promise.all([
-      getShow(showId),
-      getShowEpisodes(showId),
+    const [showData, episodeData, userShows, watchedData, castData] = await Promise.all([
+      getCachedShow(showId, () => getShow(showId)),
+      getCachedEpisodes(showId, () => getShowEpisodes(showId)),
       fetchUserShows(),
-      fetchWatchedEpisodes(showId),
+      getCachedWatchedEpisodes(showId, () => fetchWatchedEpisodes(showId)),
+      getShowCast(showId).catch(() => []),
     ]);
     setShow(showData);
     setEpisodes(episodeData);
     setUserShow(userShows.find((s) => s.tvmaze_id === showId) ?? null);
     setWatched(watchedData);
+    setCast(castData);
   }, [showId]);
 
   useFocusEffect(
@@ -131,6 +137,14 @@ export default function ShowDetailScreen() {
     setMenuOpen(false);
   }
 
+  async function handlePause() {
+    if (!show) return;
+    const nextStatus = userShow?.status === "paused" ? "watching" : "paused";
+    const result = await setShowStatus(show.id, nextStatus);
+    setUserShow(result);
+    setMenuOpen(false);
+  }
+
   async function handleToggleFavorite() {
     if (!show || !userShow) return;
     const result = await setShowFavorite(show.id, !userShow.is_favorite);
@@ -176,6 +190,31 @@ export default function ShowDetailScreen() {
 
   async function toggleEpisode(ep: TVMazeEpisode) {
     const isWatched = watchedIds.has(ep.id);
+
+    if (!isWatched) {
+      const earlierUnwatched = episodes.filter((e) => {
+        const isEarlier = e.season < ep.season || (e.season === ep.season && e.number < ep.number);
+        const aired = new Date(e.airstamp).getTime() <= Date.now();
+        return isEarlier && aired && !watchedIds.has(e.id);
+      });
+
+      if (earlierUnwatched.length > 0) {
+        const choice = await askPreviousEpisodes();
+        if (choice === "allPrevious") {
+          const toMark = [...earlierUnwatched, ep];
+          await setEpisodesWatched(
+            showId,
+            toMark.map((e) => ({ id: e.id, season: e.season, number: e.number }))
+          );
+          setWatched((prev) => [
+            ...prev,
+            ...toMark.map((e) => ({ tvmaze_episode_id: e.id, season: e.season, number: e.number, times_watched: 1 } as WatchedEpisode)),
+          ]);
+          return;
+        }
+      }
+    }
+
     await setEpisodeWatched({
       tvmaze_show_id: showId,
       tvmaze_episode_id: ep.id,
@@ -262,7 +301,9 @@ export default function ShowDetailScreen() {
                   { width: progressAnim.interpolate({ inputRange: [0, 1], outputRange: ["0%", "100%"] }) },
                   userShow?.status === "dropped"
                     ? styles.progressBarDropped
-                    : progress >= 1 && styles.progressBarComplete,
+                    : userShow?.status === "paused"
+                      ? styles.progressBarPaused
+                      : progress >= 1 && styles.progressBarComplete,
                 ]}
               />
             </View>
@@ -300,6 +341,35 @@ export default function ShowDetailScreen() {
                   {show.ended ? ` – ${show.ended.slice(0, 4)}` : ` – ${t.showDetail.present}`}
                 </Text>
                 <Text style={styles.meta}>{show.status}</Text>
+
+                {cast.length > 0 && (
+                  <>
+                    <View style={styles.divider} />
+                    <Text style={styles.sectionHeader}>{t.showDetail.cast}</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                      {cast
+                        .filter((c) => !!c.person)
+                        .slice(0, 20)
+                        .map((c) => (
+                          <View key={c.person.id} style={styles.castCard}>
+                            {c.person.image ? (
+                              <Image source={{ uri: c.person.image.medium }} style={styles.castImage} />
+                            ) : (
+                              <View style={[styles.castImage, styles.castImagePlaceholder]}>
+                                <Ionicons name="person" size={24} color={colors.textFaint} />
+                              </View>
+                            )}
+                            <Text style={styles.castName} numberOfLines={1}>
+                              {c.person.name}
+                            </Text>
+                            <Text style={styles.castCharacter} numberOfLines={1}>
+                              {c.character.name}
+                            </Text>
+                          </View>
+                        ))}
+                    </ScrollView>
+                  </>
+                )}
 
                 <View style={styles.divider} />
                 <Text style={styles.sectionHeader}>{t.showDetail.comments}</Text>
@@ -368,6 +438,16 @@ export default function ShowDetailScreen() {
           <Pressable style={styles.menuSheet} onPress={(e) => e.stopPropagation()}>
             {userShow ? (
               <>
+                <Pressable style={styles.menuItem} onPress={handlePause}>
+                  <Ionicons
+                    name={userShow.status === "paused" ? "play-outline" : "pause-circle-outline"}
+                    size={20}
+                    color={colors.text}
+                  />
+                  <Text style={styles.menuItemText}>
+                    {userShow.status === "paused" ? t.showDetail.resumeFromPause : t.showDetail.pauseShow}
+                  </Text>
+                </Pressable>
                 <Pressable style={styles.menuItem} onPress={handleStop}>
                   <Ionicons
                     name={userShow.status === "dropped" ? "play-outline" : "stop-circle-outline"}
@@ -597,6 +677,7 @@ function createStyles(colors: Colors) {
   progressBar: { height: 6, borderRadius: 3, backgroundColor: colors.accent },
   progressBarComplete: { backgroundColor: colors.green },
   progressBarDropped: { backgroundColor: colors.red },
+  progressBarPaused: { backgroundColor: colors.yellow },
   progressLabel: { fontSize: 12, fontWeight: "800", color: colors.textMuted, width: 36, textAlign: "right" },
   addRow: {
     flexDirection: "row",
@@ -630,6 +711,11 @@ function createStyles(colors: Colors) {
   commentsPlaceholderText: { color: colors.textFaint, fontSize: 13, fontWeight: "600" },
   summary: { color: colors.text, fontSize: 14, lineHeight: 21, marginBottom: 12 },
   meta: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
+  castCard: { width: 84, marginRight: 12 },
+  castImage: { width: 84, height: 84, borderRadius: radius.md, backgroundColor: colors.backgroundAlt },
+  castImagePlaceholder: { alignItems: "center", justifyContent: "center" },
+  castName: { fontWeight: "700", fontSize: 12, color: colors.text, marginTop: 6 },
+  castCharacter: { fontSize: 11, color: colors.textMuted },
   trackCard: { width: 130, marginRight: 12 },
   trackImage: { width: 130, height: 80, borderRadius: radius.sm },
   trackCode: { fontWeight: "800", fontSize: 12, color: colors.text, marginTop: 6 },

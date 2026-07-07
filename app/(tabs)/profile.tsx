@@ -7,7 +7,7 @@ import { File } from "expo-file-system";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabase";
-import { createList, fetchAllListItems, fetchFavorites, fetchLists, fetchUserShows, ListItem, ShowList, UserShow } from "../../lib/userShows";
+import { createList, fetchAllListItems, fetchEpisodeCount, fetchFavorites, fetchLists, fetchUserShows, ListItem, ShowList, UserShow } from "../../lib/userShows";
 import { importTvTimeCsv, importTvTimeJson, ImportProgress } from "../../lib/tvtimeImport";
 import { useColors, radius, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
@@ -56,10 +56,7 @@ export default function ProfileScreen() {
     fetchFavorites().then(setFavorites);
     fetchLists().then(setLists);
     fetchAllListItems().then(setListItems);
-    supabase
-      .from("watched_episodes")
-      .select("id", { count: "exact", head: true })
-      .then(({ count }) => setEpisodeCount(count ?? 0));
+    fetchEpisodeCount().then(setEpisodeCount);
     fetchUnreadNotificationCount().then(setUnreadCount);
     fetchMyProfile().then((p) => {
       setProfile(p);
@@ -150,6 +147,7 @@ export default function ProfileScreen() {
     }
   }
 
+  const pausedShows = useMemo(() => shows.filter((s) => s.status === "paused"), [shows]);
   const droppedShows = useMemo(() => shows.filter((s) => s.status === "dropped"), [shows]);
 
   const email = session?.user.email ?? "";
@@ -306,6 +304,17 @@ export default function ProfileScreen() {
           <Text style={styles.empty}>{t.profile.noShows}</Text>
         ) : (
           shows.map((s) => (
+            <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
+          ))
+        )}
+      </ScrollView>
+
+      <SectionHeader title={t.profile.paused} styles={styles} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
+        {pausedShows.length === 0 ? (
+          <Text style={styles.empty}>{t.profile.noPaused}</Text>
+        ) : (
+          pausedShows.map((s) => (
             <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
           ))
         )}
