@@ -86,10 +86,11 @@ function createStyles(colors: Colors) {
       backgroundColor: colors.background,
     },
     logo: {
-      width: 160,
-      height: 160,
+      width: 96,
+      height: 96,
       alignSelf: "center",
-      borderRadius: "35px",
+      marginBottom: 12,
+      borderRadius: radius.lg,
     },
     subtitle: {
       fontSize: 16,

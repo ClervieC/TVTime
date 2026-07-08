@@ -1,6 +1,7 @@
 import { ReactNode } from "react";
-import { View, Text, Pressable, StyleSheet } from "react-native";
-import { useColors, radius, Colors } from "../lib/theme";
+import { Text, Pressable, StyleSheet } from "react-native";
+import { useColors, type, Colors } from "../lib/theme";
+import { Avatar } from "./Avatar";
 
 interface UserRowProps {
   username: string;
@@ -14,9 +15,7 @@ export function UserRow({ username, onPress, trailing }: UserRowProps) {
 
   return (
     <Pressable style={styles.row} onPress={onPress}>
-      <View style={styles.avatar}>
-        <Text style={styles.avatarInitial}>{username[0]?.toUpperCase()}</Text>
-      </View>
+      <Avatar name={username} size="sm" />
       <Text style={styles.username} numberOfLines={1}>
         {username}
       </Text>
@@ -34,15 +33,6 @@ function createStyles(colors: Colors) {
       paddingVertical: 10,
       paddingHorizontal: 16,
     },
-    avatar: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: colors.accent,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    avatarInitial: { fontSize: 16, fontWeight: "800", color: colors.onAccent },
-    username: { flex: 1, fontWeight: "700", fontSize: 14, color: colors.text },
+    username: { flex: 1, fontWeight: "700", fontSize: type.body, color: colors.text },
   });
 }

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, Alert, ActivityIndicator, Platform, Switch } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
@@ -8,18 +8,37 @@ import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabase";
 import { createList, fetchAllListItems, fetchEpisodeCount, fetchFavorites, fetchLists, fetchUserShows, ListItem, ShowList, UserShow } from "../../lib/userShows";
+import { fetchUserMovies, fetchFavoriteMovies, UserMovie } from "../../lib/userMovies";
 import { importTvTimeCsv, importTvTimeJson, ImportProgress } from "../../lib/tvtimeImport";
-import { useColors, radius, Colors } from "../../lib/theme";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { Language } from "../../lib/userSettings";
 import { fetchMyProfile, createProfile, Profile } from "../../lib/profiles";
 import { fetchFollowCounts } from "../../lib/follows";
-import { fetchUnreadNotificationCount } from "../../lib/notifications";
+import { useNotifications } from "../../context/NotificationsContext";
 import { ShowCard } from "../../components/ShowCard";
+import { MovieCard } from "../../components/MovieCard";
+import { Pill } from "../../components/Pill";
+import { Avatar } from "../../components/Avatar";
+import { EmptyState } from "../../components/EmptyState";
 
 const USERNAME_RE = /^[a-zA-Z0-9_]{3,20}$/;
 
 const AVG_EPISODE_MINUTES = 42;
+// TMDB runtime per movie isn't fetched in bulk here (that's up to 700+ calls
+// just for a stat) — a flat feature-length estimate mirrors how show watch
+// time already estimates from AVG_EPISODE_MINUTES rather than exact runtimes.
+const AVG_MOVIE_MINUTES = 110;
+
+// Mirrors app/(tabs)/_layout.tsx's own refetch throttle — this screen's
+// useFocusEffect fires on every return to the Profile tab (including
+// quick in-and-out navigation, e.g. opening and closing a list), and load()
+// is nine separate Supabase round trips (shows, movies, favorite movies,
+// favorites, lists, every list item across every list, episode count,
+// unread count, profile+follow counts), unconditionally. This bounds that
+// to at most once per interval; the explicit post-import load() call below
+// still always runs immediately regardless.
+const MIN_RELOAD_INTERVAL_MS = 10_000;
 
 function formatTvTime(totalMinutes: number) {
   const totalHours = Math.floor(totalMinutes / 60);
@@ -33,7 +52,9 @@ export default function ProfileScreen() {
   const { session } = useAuth();
   const router = useRouter();
   const [shows, setShows] = useState<UserShow[]>([]);
+  const [movies, setMovies] = useState<UserMovie[]>([]);
   const [favorites, setFavorites] = useState<UserShow[]>([]);
+  const [favoriteMovies, setFavoriteMovies] = useState<UserMovie[]>([]);
   const [lists, setLists] = useState<ShowList[]>([]);
   const [listItems, setListItems] = useState<ListItem[]>([]);
   const [episodeCount, setEpisodeCount] = useState(0);
@@ -46,22 +67,37 @@ export default function ProfileScreen() {
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [savingUsername, setSavingUsername] = useState(false);
   const [followCounts, setFollowCounts] = useState({ followers: 0, following: 0 });
-  const [unreadCount, setUnreadCount] = useState(0);
+  const { unreadCount } = useNotifications();
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, language, setLanguage, spoilerMode, setSpoilerMode } = useLanguage();
 
+  const lastLoadedAt = useRef(0);
   const load = useCallback(() => {
+    lastLoadedAt.current = Date.now();
     fetchUserShows().then(setShows);
+    fetchUserMovies().then(setMovies);
+    fetchFavoriteMovies().then(setFavoriteMovies);
     fetchFavorites().then(setFavorites);
     fetchLists().then(setLists);
     fetchAllListItems().then(setListItems);
     fetchEpisodeCount().then(setEpisodeCount);
-    fetchUnreadNotificationCount().then(setUnreadCount);
     fetchMyProfile().then((p) => {
       setProfile(p);
       if (p) fetchFollowCounts(p.user_id).then(setFollowCounts);
     });
+  }, []);
+
+  // Stable references so MovieCard's memo() can skip re-rendering unrelated
+  // cards — a movie can appear in both `movies` and `favoriteMovies`, so both
+  // are patched together rather than refetching either collection.
+  const handleMovieUnwatched = useCallback((id: string) => {
+    setMovies((prev) => prev.filter((m) => m.id !== id));
+    setFavoriteMovies((prev) => prev.filter((m) => m.id !== id));
+  }, []);
+  const handleMovieRewatched = useCallback((updated: UserMovie) => {
+    setMovies((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
+    setFavoriteMovies((prev) => prev.map((m) => (m.id === updated.id ? updated : m)));
   }, []);
 
   async function handleSaveUsername() {
@@ -84,6 +120,7 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      if (Date.now() - lastLoadedAt.current < MIN_RELOAD_INTERVAL_MS) return;
       load();
     }, [load])
   );
@@ -153,13 +190,13 @@ export default function ProfileScreen() {
   const email = session?.user.email ?? "";
   const displayName = profile?.username ?? email.split("@")[0] ?? "Moi";
   const tvTime = formatTvTime(episodeCount * AVG_EPISODE_MINUTES);
+  const movieWatchCount = useMemo(() => movies.reduce((sum, m) => sum + m.times_watched, 0), [movies]);
+  const movieTime = formatTvTime(movieWatchCount * AVG_MOVIE_MINUTES);
 
   return (
     <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
       <View style={styles.header}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarInitial}>{displayName[0]?.toUpperCase()}</Text>
-        </View>
+        <Avatar name={displayName} size="md" />
         <View style={styles.headerInfo}>
           <Text style={styles.username}>{displayName}</Text>
           {!!email && (
@@ -223,36 +260,61 @@ export default function ProfileScreen() {
       </Pressable>
 
       <SectionHeader title={t.profile.statistics} styles={styles} />
-      <View style={styles.statHero}>
-        <View style={styles.statHeroRow}>
-          <View style={styles.statHeroIcon}>
-            <Ionicons name="time-outline" size={16} color={colors.accent} />
-          </View>
-          <Text style={styles.statHeroLabel}>{t.profile.watchTime}</Text>
-        </View>
-        <View style={styles.tvTimeRow}>
-          <TvTimeUnit value={tvTime.months} label={t.profile.months} styles={styles} />
-          <TvTimeUnit value={tvTime.days} label={t.profile.days} styles={styles} />
-          <TvTimeUnit value={tvTime.hours} label={t.profile.hours} styles={styles} />
-        </View>
-
-        <View style={styles.statHeroDivider} />
-
-        <View style={styles.statHeroRow}>
-          <View style={styles.statHeroIcon}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={colors.accent} />
-          </View>
-          <Text style={styles.statHeroLabel}>{t.profile.episodesWatched}</Text>
-          <Text style={styles.statHeroBig}>{episodeCount.toLocaleString()}</Text>
-        </View>
-      </View>
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsRow}>
+        <StatCard
+          icon="time-outline"
+          label={t.profile.watchTime}
+          value={`${tvTime.months}${t.profile.months[0]} ${tvTime.days}${t.profile.days[0]} ${tvTime.hours}${t.profile.hours[0]}`}
+          colors={colors}
+          styles={styles}
+        />
+        <StatCard
+          icon="checkmark-circle-outline"
+          label={t.profile.episodesWatched}
+          value={episodeCount.toLocaleString()}
+          colors={colors}
+          styles={styles}
+        />
+        <StatCard
+          icon="time-outline"
+          label={t.profile.movieWatchTime}
+          value={`${movieTime.months}${t.profile.months[0]} ${movieTime.days}${t.profile.days[0]} ${movieTime.hours}${t.profile.hours[0]}`}
+          colors={colors}
+          styles={styles}
+        />
+        <StatCard
+          icon="checkmark-circle-outline"
+          label={t.profile.moviesWatched}
+          value={movies.length.toLocaleString()}
+          colors={colors}
+          styles={styles}
+        />
+      </ScrollView>
 
       <SectionHeader title={t.profile.favorites} styles={styles} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
-        {favorites.length === 0 ? (
+        {favorites.length === 0 && favoriteMovies.length === 0 ? (
           <Text style={styles.empty}>{t.profile.noFavorites}</Text>
         ) : (
-          favorites.map((s) => <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />)
+          <>
+            {favorites.map((s) => (
+              <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
+            ))}
+            {favoriteMovies.map((m) => (
+              <View key={m.id} style={styles.movieCardWrap}>
+                <MovieCard
+                  id={m.id}
+                  title={m.title}
+                  year={m.year}
+                  posterPath={m.poster_path}
+                  watchedAt={m.watched_at ?? m.created_at}
+                  timesWatched={m.times_watched}
+                  onUnwatched={handleMovieUnwatched}
+                  onRewatched={handleMovieRewatched}
+                />
+              </View>
+            ))}
+          </>
         )}
       </ScrollView>
 
@@ -306,6 +368,30 @@ export default function ProfileScreen() {
           shows.map((s) => (
             <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
           ))
+        )}
+      </ScrollView>
+
+      <SectionHeader title={t.profile.movies} styles={styles} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
+        {movies.length === 0 ? (
+          <Text style={styles.empty}>{t.profile.noMovies}</Text>
+        ) : (
+          movies
+            .slice(0, 20)
+            .map((m) => (
+              <View key={m.id} style={styles.movieCardWrap}>
+                <MovieCard
+                  id={m.id}
+                  title={m.title}
+                  year={m.year}
+                  posterPath={m.poster_path}
+                  watchedAt={m.watched_at ?? m.created_at}
+                  timesWatched={m.times_watched}
+                  onUnwatched={handleMovieUnwatched}
+                  onRewatched={handleMovieRewatched}
+                />
+              </View>
+            ))
         )}
       </ScrollView>
 
@@ -393,11 +479,29 @@ function SectionHeader({ title, styles }: { title: string; styles: ProfileStyles
   );
 }
 
-function TvTimeUnit({ value, label, styles }: { value: number; label: string; styles: ProfileStyles }) {
+// Compact enough that show + movie stats fit on one horizontally-scrolling
+// row instead of two full-width stacked cards — same information, a lot
+// less vertical space.
+function StatCard({
+  icon,
+  label,
+  value,
+  colors,
+  styles,
+}: {
+  icon: keyof typeof Ionicons.glyphMap;
+  label: string;
+  value: string;
+  colors: Colors;
+  styles: ProfileStyles;
+}) {
   return (
-    <View style={styles.tvTimeUnit}>
-      <Text style={styles.tvTimeValue}>{value}</Text>
-      <Text style={styles.tvTimeLabel}>{label}</Text>
+    <View style={styles.statCard}>
+      <View style={styles.statCardIcon}>
+        <Ionicons name={icon} size={16} color={colors.accent} />
+      </View>
+      <Text style={styles.statCardLabel}>{label}</Text>
+      <Text style={styles.statCardValue}>{value}</Text>
     </View>
   );
 }
@@ -416,15 +520,9 @@ function LanguageSwitch({
   return (
     <View style={styles.languageSwitch}>
       {(["en", "fr"] as const).map((lang) => (
-        <Pressable
-          key={lang}
-          style={[styles.languageOption, language === lang && { backgroundColor: colors.accent }]}
-          onPress={() => setLanguage(lang)}
-        >
-          <Text style={[styles.languageOptionText, language === lang && { color: colors.onAccent }]}>
-            {lang.toUpperCase()}
-          </Text>
-        </Pressable>
+        <Pill key={lang} size="sm" tone={language === lang ? "solid" : "neutral"} onPress={() => setLanguage(lang)}>
+          {lang.toUpperCase()}
+        </Pill>
       ))}
     </View>
   );
@@ -440,15 +538,6 @@ function createStyles(colors: Colors) {
     padding: 16,
     paddingTop: 24,
   },
-  avatar: {
-    width: 64,
-    height: 64,
-    borderRadius: 32,
-    backgroundColor: colors.accent,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  avatarInitial: { fontSize: 26, fontWeight: "800", color: colors.onAccent },
   headerInfo: { flex: 1 },
   username: { fontSize: 20, fontWeight: "800", color: colors.text },
   userEmail: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
@@ -472,7 +561,7 @@ function createStyles(colors: Colors) {
   },
   followStat: { flex: 1, alignItems: "center" },
   followStatBorder: { borderLeftWidth: 1, borderLeftColor: colors.border },
-  followNumber: { fontSize: 18, fontWeight: "800", color: colors.text },
+  followNumber: { fontSize: type.title, fontWeight: "800", color: colors.text },
   followLabel: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   usernamePrompt: {
     marginHorizontal: 16,
@@ -482,7 +571,7 @@ function createStyles(colors: Colors) {
     backgroundColor: colors.accentSoft,
     borderRadius: radius.md,
   },
-  usernamePromptTitle: { fontWeight: "800", fontSize: 15, color: colors.text },
+  usernamePromptTitle: { fontWeight: "800", fontSize: type.body, color: colors.text },
   usernamePromptDesc: { fontSize: 13, color: colors.textMuted, marginTop: 4, marginBottom: 12 },
   usernameError: { fontSize: 12, color: colors.red, marginTop: 8 },
   sectionHeader: {
@@ -490,31 +579,26 @@ function createStyles(colors: Colors) {
     paddingTop: 24,
     paddingBottom: 12,
   },
-  sectionTitle: { fontSize: 18, fontWeight: "800", color: colors.text },
-  statHero: {
-    marginHorizontal: 16,
+  sectionTitle: { fontSize: type.subtitle, fontWeight: "800", color: colors.text },
+  statsRow: { paddingHorizontal: 16, gap: 10 },
+  statCard: {
+    width: 140,
     backgroundColor: colors.surface,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: radius.lg,
-    padding: 16,
+    borderRadius: radius.md,
+    padding: 12,
   },
-  statHeroRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  statHeroIcon: {
+  statCardIcon: {
     width: 26,
     height: 26,
-    borderRadius: 13,
+    borderRadius: radius.pill,
     backgroundColor: colors.accentSoft,
     alignItems: "center",
     justifyContent: "center",
   },
-  statHeroLabel: { flex: 1, fontWeight: "700", fontSize: 13, color: colors.text },
-  statHeroBig: { fontSize: 20, fontWeight: "800", color: colors.text },
-  tvTimeRow: { flexDirection: "row", marginTop: 14, gap: 8 },
-  tvTimeUnit: { alignItems: "center", flex: 1 },
-  tvTimeValue: { fontSize: 24, fontWeight: "800", color: colors.text },
-  tvTimeLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-  statHeroDivider: { height: 1, backgroundColor: colors.border, marginVertical: 16 },
+  statCardLabel: { fontSize: 12, color: colors.textMuted, marginTop: 8 },
+  statCardValue: { fontSize: type.title, fontWeight: "800", color: colors.text, marginTop: 2 },
   listRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -562,6 +646,10 @@ function createStyles(colors: Colors) {
   },
   createListText: { fontWeight: "700", fontSize: 14, color: colors.accent },
   showsRow: { paddingHorizontal: 16, paddingBottom: 24 },
+  // MovieCard is built for equal-width grid columns (flex:1) — wrapping it in
+  // a fixed-width box here gives it the same kind of bounded parent a grid
+  // column would, so it renders correctly inside this horizontal scroll.
+  movieCardWrap: { width: 110, marginRight: 12 },
   empty: { color: colors.textMuted },
   importRow: {
     flexDirection: "row",
@@ -593,8 +681,6 @@ function createStyles(colors: Colors) {
     padding: 3,
     gap: 2,
   },
-  languageOption: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: radius.sm - 2 },
-  languageOptionText: { fontSize: 12, fontWeight: "800", color: colors.textMuted },
   signOut: { alignItems: "center", paddingVertical: 24 },
   signOutText: { color: colors.red, fontWeight: "600" },
   });

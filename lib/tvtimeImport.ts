@@ -4,7 +4,10 @@ import { fetchUserShows, upsertUserShow, bulkUpsertWatchedEpisodes, setShowFavor
 import { bulkUpsertUserMovies } from "./userMovies";
 import { mapWithConcurrency } from "./concurrency";
 
-const TVMAZE_REQUEST_DELAY_MS = 150;
+// TVmaze's rate limit is now enforced globally in lib/tvmaze.ts's fetchWithRetry
+// (a shared pacing gate all callers funnel through), so this concurrency only
+// controls how many shows are matched/processed in parallel — the actual
+// network dispatch rate stays safe no matter how high this is.
 const IMPORT_CONCURRENCY = 4;
 
 interface TvTimeRow {
@@ -14,10 +17,6 @@ interface TvTimeRow {
   season: number | null;
   number: number | null;
   watchedAt: string;
-}
-
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function stripYearSuffix(title: string) {
@@ -71,13 +70,11 @@ async function findBestShowMatch(title: string) {
   };
 
   let match = await tryQuery(title);
-  await sleep(TVMAZE_REQUEST_DELAY_MS);
 
   if (!match) {
     const stripped = stripYearSuffix(title);
     if (stripped !== title) {
       match = await tryQuery(stripped);
-      await sleep(TVMAZE_REQUEST_DELAY_MS);
     }
   }
 
@@ -168,7 +165,6 @@ export async function importTvTimeCsv(
       completed += 1;
       return;
     }
-    await sleep(TVMAZE_REQUEST_DELAY_MS);
 
     const episodeByKey = new Map<string, TVMazeEpisode>();
     for (const ep of episodes) episodeByKey.set(`${ep.season}-${ep.number}`, ep);
@@ -211,17 +207,21 @@ export async function importTvTimeCsv(
 
     if (records.length === 0) return;
 
-    await bulkUpsertWatchedEpisodes(show.id, records);
-    episodesImported += records.length;
-
     const airedEpisodeCount = episodes.filter((ep) => new Date(ep.airstamp).getTime() <= Date.now()).length;
     const isEnded = show.status === "Ended";
-    await upsertUserShow({
-      tvmaze_id: show.id,
-      show_name: show.name,
-      show_image: show.image?.medium ?? null,
-      status: isEnded && records.length >= airedEpisodeCount ? "watched" : "watching",
-    });
+    // Independent writes to unrelated tables (watched_episodes vs. user_shows)
+    // — running them in parallel roughly halves this show's share of a
+    // large-library import's total time.
+    await Promise.all([
+      bulkUpsertWatchedEpisodes(show.id, records),
+      upsertUserShow({
+        tvmaze_id: show.id,
+        show_name: show.name,
+        show_image: show.image?.medium ?? null,
+        status: isEnded && records.length >= airedEpisodeCount ? "watched" : "watching",
+      }),
+    ]);
+    episodesImported += records.length;
   });
 
   return {
@@ -352,7 +352,6 @@ async function importTvTimeShowsJson(
       } catch {
         show = null;
       }
-      await sleep(TVMAZE_REQUEST_DELAY_MS);
     }
     if (!show) {
       show = await findBestShowMatch(raw.title);
@@ -377,7 +376,6 @@ async function importTvTimeShowsJson(
       completed += 1;
       return;
     }
-    await sleep(TVMAZE_REQUEST_DELAY_MS);
 
     const episodeByKey = new Map<string, TVMazeEpisode>();
     for (const ep of episodes) episodeByKey.set(`${ep.season}-${ep.number}`, ep);
@@ -402,20 +400,24 @@ async function importTvTimeShowsJson(
     completed += 1;
     onProgress?.({ phase: "importing", current: completed, total: rawShows.length, label: show.name });
 
-    if (records.length > 0) {
-      await bulkUpsertWatchedEpisodes(show.id, records);
-      episodesImported += records.length;
-    }
-
     const airedEpisodeCount = episodes.filter((ep) => new Date(ep.airstamp).getTime() <= Date.now()).length;
     const status = mapTvTimeJsonStatus(raw.status, records.length, airedEpisodeCount, show.status === "Ended");
 
-    await upsertUserShow({
-      tvmaze_id: show.id,
-      show_name: show.name,
-      show_image: show.image?.medium ?? null,
-      status,
-    });
+    // watched_episodes and user_shows are independent writes and can run
+    // concurrently; setShowFavorite has to wait since it updates the
+    // user_shows row upsertUserShow above just created (a favorite toggle on
+    // a not-yet-existing row would silently affect zero rows).
+    await Promise.all([
+      records.length > 0 ? bulkUpsertWatchedEpisodes(show.id, records) : Promise.resolve(),
+      upsertUserShow({
+        tvmaze_id: show.id,
+        show_name: show.name,
+        show_image: show.image?.medium ?? null,
+        status,
+      }),
+    ]);
+    if (records.length > 0) episodesImported += records.length;
+
     if (raw.is_favorite) {
       await setShowFavorite(show.id, true);
     }

@@ -1,12 +1,28 @@
 import { useState, useMemo } from "react";
 import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors, radius, Colors } from "../lib/theme";
+import { useColors, radius, type, Colors } from "../lib/theme";
 import { useLanguage } from "../lib/i18n";
-import { EnrichedComment } from "../lib/comments";
+import { Profile } from "../lib/profiles";
+import { Avatar } from "./Avatar";
+import { EmptyState } from "./EmptyState";
+
+// Structural rather than importing lib/comments.ts's EnrichedComment directly
+// — lib/movieComments.ts's EnrichedMovieComment has a different target key
+// (tmdb_id vs. tvmaze_show_id/tvmaze_episode_id) but the same shape for
+// everything this component actually renders, so either satisfies this.
+export interface CommentLike {
+  id: string;
+  user_id: string;
+  body: string;
+  created_at: string;
+  author: Profile | null;
+  reactionCount: number;
+  reactedByMe: boolean;
+}
 
 interface CommentsSectionProps {
-  comments: EnrichedComment[];
+  comments: CommentLike[];
   loading: boolean;
   myUserId: string | null;
   onSubmit: (body: string) => Promise<void>;
@@ -24,6 +40,7 @@ export function CommentsSection({
 }: CommentsSectionProps) {
   const [text, setText] = useState("");
   const [posting, setPosting] = useState(false);
+  const [postError, setPostError] = useState(false);
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useLanguage();
@@ -32,9 +49,12 @@ export function CommentsSection({
     const body = text.trim();
     if (!body || posting) return;
     setPosting(true);
+    setPostError(false);
     try {
       await onSubmit(body);
       setText("");
+    } catch {
+      setPostError(true);
     } finally {
       setPosting(false);
     }
@@ -63,15 +83,17 @@ export function CommentsSection({
           )}
         </Pressable>
       </View>
+      {postError && <Text style={styles.errorText}>{t.comments.postError}</Text>}
 
       {loading ? (
         <ActivityIndicator color={colors.textFaint} style={{ marginTop: 16 }} />
       ) : comments.length === 0 ? (
-        <Text style={styles.empty}>{t.comments.empty}</Text>
+        <EmptyState icon="chatbubble-outline" title={t.comments.empty} />
       ) : (
         comments.map((c) => (
           <View key={c.id} style={styles.commentRow}>
             <View style={styles.commentHeader}>
+              <Avatar name={c.author?.username ?? t.comments.unknownUser} size="sm" />
               <Text style={styles.commentAuthor} numberOfLines={1}>
                 {c.author?.username ?? t.comments.unknownUser}
               </Text>
@@ -114,11 +136,11 @@ function createStyles(colors: Colors) {
       minHeight: 40,
       maxHeight: 100,
       backgroundColor: colors.backgroundAlt,
-      borderRadius: radius.md,
+      borderRadius: radius.sm,
       paddingHorizontal: 14,
       paddingVertical: 10,
       color: colors.text,
-      fontSize: 14,
+      fontSize: type.input,
     },
     sendBtn: {
       width: 40,
@@ -129,7 +151,7 @@ function createStyles(colors: Colors) {
       justifyContent: "center",
     },
     sendBtnDisabled: { opacity: 0.4 },
-    empty: { color: colors.textMuted, textAlign: "center", paddingVertical: 20 },
+    errorText: { color: colors.red, fontSize: type.caption, marginTop: -10, marginBottom: 12 },
     commentRow: {
       backgroundColor: colors.surface,
       borderRadius: radius.md,
@@ -137,11 +159,11 @@ function createStyles(colors: Colors) {
       marginBottom: 10,
     },
     commentHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-    commentAuthor: { flex: 1, fontWeight: "800", fontSize: 13, color: colors.text },
-    commentDate: { fontSize: 11, color: colors.textFaint },
+    commentAuthor: { flex: 1, fontWeight: "800", fontSize: type.body, color: colors.text },
+    commentDate: { fontSize: type.micro, color: colors.textFaint },
     deleteBtn: { padding: 2 },
-    commentBody: { color: colors.text, fontSize: 13, lineHeight: 19, marginTop: 6 },
+    commentBody: { color: colors.text, fontSize: type.bodySm, lineHeight: 19, marginTop: 6 },
     reactionBtn: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: 8, alignSelf: "flex-start" },
-    reactionCount: { fontSize: 12, fontWeight: "700", color: colors.textFaint },
+    reactionCount: { fontSize: type.caption, fontWeight: "700", color: colors.textFaint },
   });
 }

@@ -1,7 +1,6 @@
-import { createContext, useCallback, useContext, useMemo, useRef, useState, PropsWithChildren } from "react";
-import { View, Text, Pressable, StyleSheet } from "react-native";
-import { useColors, radius, Colors } from "../lib/theme";
+import { createContext, useCallback, useContext, useRef, useState, PropsWithChildren } from "react";
 import { useLanguage } from "../lib/i18n";
+import { ChoiceDialog } from "../components/ChoiceDialog";
 
 type PreviousEpisodesChoice = "onlyThis" | "allPrevious";
 
@@ -14,12 +13,15 @@ const PreviousEpisodesPromptContext = createContext<PreviousEpisodesPromptContex
 export function PreviousEpisodesPromptProvider({ children }: PropsWithChildren) {
   const [visible, setVisible] = useState(false);
   const resolver = useRef<((choice: PreviousEpisodesChoice) => void) | null>(null);
-  const colors = useColors();
-  const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useLanguage();
 
   const askPreviousEpisodes = useCallback(() => {
     return new Promise<PreviousEpisodesChoice>((resolve) => {
+      // Only one dialog can be on screen at a time. If a prior ask is still
+      // pending, resolve it (matching the dismiss default) rather than
+      // clobbering resolver.current and leaving that caller's promise to
+      // hang forever.
+      resolver.current?.("onlyThis");
       resolver.current = resolve;
       setVisible(true);
     });
@@ -34,20 +36,17 @@ export function PreviousEpisodesPromptProvider({ children }: PropsWithChildren) 
   return (
     <PreviousEpisodesPromptContext.Provider value={{ askPreviousEpisodes }}>
       {children}
-      {visible && (
-        <Pressable style={styles.backdrop} onPress={() => choose("onlyThis")}>
-          <Pressable style={styles.card} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.title}>{t.previousEpisodesPrompt.title}</Text>
-            <Text style={styles.subtitle}>{t.previousEpisodesPrompt.subtitle}</Text>
-            <Pressable style={styles.optionBtn} onPress={() => choose("onlyThis")}>
-              <Text style={styles.optionText}>{t.previousEpisodesPrompt.onlyThis}</Text>
-            </Pressable>
-            <Pressable style={[styles.optionBtn, styles.optionBtnPrimary]} onPress={() => choose("allPrevious")}>
-              <Text style={[styles.optionText, styles.optionTextPrimary]}>{t.previousEpisodesPrompt.allPrevious}</Text>
-            </Pressable>
-          </Pressable>
-        </Pressable>
-      )}
+      <ChoiceDialog
+        visible={visible}
+        title={t.previousEpisodesPrompt.title}
+        subtitle={t.previousEpisodesPrompt.subtitle}
+        options={[
+          { value: "onlyThis", label: t.previousEpisodesPrompt.onlyThis },
+          { value: "allPrevious", label: t.previousEpisodesPrompt.allPrevious, primary: true },
+        ]}
+        onChoose={choose}
+        onDismiss={() => choose("onlyThis")}
+      />
     </PreviousEpisodesPromptContext.Provider>
   );
 }
@@ -56,40 +55,4 @@ export function usePreviousEpisodesPrompt() {
   const ctx = useContext(PreviousEpisodesPromptContext);
   if (!ctx) throw new Error("usePreviousEpisodesPrompt must be used within PreviousEpisodesPromptProvider");
   return ctx.askPreviousEpisodes;
-}
-
-function createStyles(colors: Colors) {
-  return StyleSheet.create({
-    backdrop: {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: "rgba(0,0,0,0.45)",
-      alignItems: "center",
-      justifyContent: "center",
-      zIndex: 1000,
-      padding: 24,
-    },
-    card: {
-      backgroundColor: colors.surface,
-      borderRadius: radius.lg,
-      padding: 20,
-      width: "100%",
-      maxWidth: 360,
-    },
-    title: { fontSize: 16, fontWeight: "800", color: colors.text, textAlign: "center" },
-    subtitle: { fontSize: 13, color: colors.textMuted, textAlign: "center", marginTop: 4, marginBottom: 16 },
-    optionBtn: {
-      backgroundColor: colors.pillBg,
-      borderRadius: radius.sm,
-      paddingVertical: 14,
-      alignItems: "center",
-      marginTop: 8,
-    },
-    optionBtnPrimary: { backgroundColor: colors.accent },
-    optionText: { fontWeight: "700", fontSize: 14, color: colors.text },
-    optionTextPrimary: { color: colors.onAccent },
-  });
 }

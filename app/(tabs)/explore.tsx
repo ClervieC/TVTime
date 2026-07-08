@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -10,59 +10,148 @@ import {
   StyleSheet,
   ActivityIndicator,
   Image,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useRouter, useFocusEffect, useNavigation } from "expo-router";
-import { getShow, getShowsPool, searchShows, TVMazeShow } from "../../lib/tvmaze";
+import { searchShows, TVMazeShow } from "../../lib/tvmaze";
 import {
   fetchUserShows,
   removeUserShow,
   setShowFavorite,
   upsertUserShow,
 } from "../../lib/userShows";
-import { useColors, radius, Colors } from "../../lib/theme";
+import {
+  searchMovies,
+  getPopularMovies,
+  getTopRatedMovies,
+  getNowPlayingMovies,
+  getUpcomingMovies,
+  getPopularTv,
+  getTopRatedTv,
+  getOnTheAirTv,
+  getUpcomingTv,
+  findTvmazeShowFromTmdbTv,
+  posterUrl,
+  TMDBSearchResult,
+  TMDBTvResult,
+} from "../../lib/tmdb";
+import { fetchUserMovieTmdbMap, addMovieToWatchlist, removeUserMovie, setMovieFavorite, UserMovie } from "../../lib/userMovies";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
-import { useScalePress, useMountIn } from "../../lib/animations";
+import { useScalePress, useMountIn, useGrowIn } from "../../lib/animations";
 import { mapWithConcurrency } from "../../lib/concurrency";
+import { EmptyState } from "../../components/EmptyState";
 
-// Most of these are already cached (see lib/tvmaze) after the first visit, but
-// on a cold cache a user who follows many shows would otherwise fire one
-// request per show at once and blow straight through TVmaze's rate limit.
-const GENRE_BIAS_FETCH_CONCURRENCY = 6;
-
-// K-Drama and New Releases are rare in TVmaze's index (ordered by internal
-// ID, roughly chronological by when the show was added — not by premiere
-// date or language), so a small sample mostly misses them. A bigger pool
-// costs nothing extra after the first load: each page is cached individually
-// (see getShowsIndex) for an hour, so repeat visits stay fast.
-const POOL_PAGES = 15;
-const CATEGORY_SIZE = 30;
-const NEW_RELEASE_WINDOW_DAYS = 120;
+type ExploreTab = "shows" | "movies";
+type Category<T> = { key: string; title: string; data: T[] };
 
 export default function ExploreScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+  const [subTab, setSubTab] = useState<ExploreTab>("shows");
   const [query, setQuery] = useState("");
-  const [pool, setPool] = useState<TVMazeShow[]>([]);
   const [searchResults, setSearchResults] = useState<TVMazeShow[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [movieSearchResults, setMovieSearchResults] = useState<TMDBSearchResult[]>([]);
   const [addedIds, setAddedIds] = useState<Set<number>>(new Set());
   const [favoriteIds, setFavoriteIds] = useState<Set<number>>(new Set());
-  const [preferredGenres, setPreferredGenres] = useState<Set<string>>(new Set());
+  const [movieTmdbMap, setMovieTmdbMap] = useState<Map<number, UserMovie>>(new Map());
+  // TMDB show id -> resolved TVmaze show, filled in either by a card's first
+  // tap (see resolveTvmazeShow) or by the background prefetch below. Without
+  // this, a card's add/favorite icon never reflected the real
+  // addedIds/favoriteIds state (both keyed by TVmaze id): a show added
+  // through any other route (search results, its own detail page, a TV Time
+  // import) would show as "not added" here forever, since nothing had ever
+  // resolved its TVmaze id — the prefetch below is what makes that check
+  // reliably persist without requiring the user to tap every card once.
+  const [resolvedTvShows, setResolvedTvShows] = useState<Map<number, TVMazeShow>>(new Map());
+  // Tracks which TMDB show ids a resolution has already been attempted for,
+  // so the prefetch effect below doesn't re-resolve the same ~40-80 visible
+  // cards every time showCategories's array identity changes (e.g. a
+  // language switch re-fetching the same categories with new titles).
+  const attemptedResolveIds = useRef<Set<number>>(new Set());
+  const [showCategories, setShowCategories] = useState<Category<TMDBTvResult>[]>([]);
+  const [movieCategories, setMovieCategories] = useState<Category<TMDBSearchResult>[]>([]);
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useLanguage();
-  let timer: ReturnType<typeof setTimeout>;
+  const underlineGrow = useGrowIn(subTab);
+  // A plain `let` here would be reassigned on every render, so a debounce
+  // scheduled in one render could never be cancelled by clearTimeout in a
+  // later one (each render closes over its own fresh variable) — a ref
+  // persists across renders like a real instance field would.
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // TMDB's own curated lists (popular/top rated/now playing or on-the-air/
+  // upcoming) replace what used to be a client-side sample of TVmaze's shows
+  // index (which has no real category/genre/trending filter of its own) —
+  // same 4-category shape on both the Shows and Movies sub-tabs now. Tapping
+  // a result still needs to resolve to a TVmaze id (see ExploreTvCard) since
+  // that's what the rest of the app tracks shows by.
+  useEffect(() => {
+    Promise.all([getPopularTv(), getTopRatedTv(), getOnTheAirTv(), getUpcomingTv()]).then(
+      ([popular, topRated, onTheAir, upcoming]) => {
+        setShowCategories(
+          [
+            { key: "popularTv", title: t.explore.categoryPopularMovies, data: popular },
+            { key: "topRatedTv", title: t.explore.categoryTopRatedMovies, data: topRated },
+            { key: "onTheAirTv", title: t.explore.categoryNowPlayingMovies, data: onTheAir },
+            { key: "upcomingTv", title: t.explore.categoryUpcomingMovies, data: upcoming },
+          ].filter((c) => c.data.length > 0),
+        );
+      },
+    );
+  }, [t]);
+
+  // Resolves every visible discover-category card's TVmaze id in the
+  // background, at low priority, so the add/favorite icons above are
+  // accurate immediately rather than only after the user has tapped that
+  // specific card once (see resolvedTvShows above). Low priority means an
+  // actual interactive tap (open/add/favorite, or a search) still jumps
+  // ahead of this batch in the shared TVmaze queue; failures (no TVmaze
+  // match for this TMDB show) are silently skipped rather than alerted,
+  // since alerting for every unmatched card in a background pass would be
+  // absurd — the alert only makes sense as feedback for a direct tap.
+  useEffect(() => {
+    const allShows = showCategories.flatMap((c) => c.data);
+    const toResolve = allShows.filter((s) => !attemptedResolveIds.current.has(s.id));
+    if (toResolve.length === 0) return;
+    toResolve.forEach((s) => attemptedResolveIds.current.add(s.id));
+
+    let cancelled = false;
+    mapWithConcurrency(
+      toResolve,
+      4,
+      (show) => findTvmazeShowFromTmdbTv(show.id, "low").catch(() => null),
+      (result, show) => {
+        if (cancelled || !result) return;
+        setResolvedTvShows((prev) => (prev.has(show.id) ? prev : new Map(prev).set(show.id, result)));
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [showCategories]);
 
   useEffect(() => {
-    getShowsPool(POOL_PAGES)
-      .then(setPool)
-      .finally(() => setLoading(false));
-  }, []);
+    Promise.all([getPopularMovies(), getTopRatedMovies(), getNowPlayingMovies(), getUpcomingMovies()]).then(
+      ([popular, topRated, nowPlaying, upcoming]) => {
+        setMovieCategories(
+          [
+            { key: "popularMovies", title: t.explore.categoryPopularMovies, data: popular },
+            { key: "topRatedMovies", title: t.explore.categoryTopRatedMovies, data: topRated },
+            { key: "nowPlayingMovies", title: t.explore.categoryNowPlayingMovies, data: nowPlaying },
+            { key: "upcomingMovies", title: t.explore.categoryUpcomingMovies, data: upcoming },
+          ].filter((c) => c.data.length > 0),
+        );
+      },
+    );
+  }, [t]);
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
+      fetchUserMovieTmdbMap().then((map) => active && setMovieTmdbMap(map));
       fetchUserShows().then((userShows) => {
         if (!active) return;
         setAddedIds(new Set(userShows.map((s) => s.tvmaze_id)));
@@ -71,22 +160,6 @@ export default function ExploreScreen() {
             userShows.filter((s) => s.is_favorite).map((s) => s.tvmaze_id),
           ),
         );
-
-        // Bias "New releases" toward genres the user already follows —
-        // getShow is cached (see lib/tvmaze), so this is free for shows
-        // already opened elsewhere (Watch List, show detail, ...).
-        const followed = userShows.filter((s) => s.status !== "dropped");
-        mapWithConcurrency(followed, GENRE_BIAS_FETCH_CONCURRENCY, (s) =>
-          getShow(s.tvmaze_id).catch(() => null),
-        ).then((shows) => {
-          if (!active) return;
-          const genres = new Set<string>();
-          for (const s of shows) {
-            if (!s) continue;
-            for (const g of s.genres) genres.add(g);
-          }
-          setPreferredGenres(genres);
-        });
       });
       // Clear the search on the way out, so coming back to a fresh Explore
       // (from another tab) never shows a stale query/result set.
@@ -94,6 +167,7 @@ export default function ExploreScreen() {
         active = false;
         setQuery("");
         setSearchResults([]);
+        setMovieSearchResults([]);
       };
     }, []),
   );
@@ -105,72 +179,27 @@ export default function ExploreScreen() {
     const unsubscribe = (navigation as any).addListener("tabPress", () => {
       setQuery("");
       setSearchResults([]);
+      setMovieSearchResults([]);
     });
     return unsubscribe;
   }, [navigation]);
 
-  // TVmaze has no server-side "trending" or genre filter, so Discover
-  // categories are derived client-side from one shared pool of shows —
-  // fetched once and reused, instead of a separate request per category.
-  const categories = useMemo(() => {
-    const withImage = pool.filter((s) => s.image?.medium);
-    const now = Date.now();
-
-    const newReleases = [...withImage]
-      .filter((s) => {
-        if (!s.premiered) return false;
-        const days =
-          (now - new Date(s.premiered).getTime()) / (1000 * 60 * 60 * 24);
-        return days >= 0 && days <= NEW_RELEASE_WINDOW_DAYS;
-      })
-      .sort((a, b) => {
-        // Shows matching a genre the user already follows are surfaced
-        // first; within each group, most recent premiere first.
-        const aMatch = a.genres.some((g) => preferredGenres.has(g)) ? 1 : 0;
-        const bMatch = b.genres.some((g) => preferredGenres.has(g)) ? 1 : 0;
-        if (aMatch !== bMatch) return bMatch - aMatch;
-        return new Date(b.premiered!).getTime() - new Date(a.premiered!).getTime();
-      })
-      .slice(0, CATEGORY_SIZE);
-
-    const popular = [...withImage]
-      .filter((s) => s.rating.average != null)
-      .sort((a, b) => (b.rating.average ?? 0) - (a.rating.average ?? 0))
-      .slice(0, CATEGORY_SIZE);
-
-    const comedy = withImage
-      .filter((s) => s.genres.includes("Comedy"))
-      .slice(0, CATEGORY_SIZE);
-    const drama = withImage
-      .filter((s) => s.genres.includes("Drama"))
-      .slice(0, CATEGORY_SIZE);
-    const kdrama = withImage
-      .filter((s) => s.language === "Korean")
-      .slice(0, CATEGORY_SIZE);
-    const sciFi = withImage
-      .filter((s) => s.genres.includes("Science-Fiction"))
-      .slice(0, CATEGORY_SIZE);
-
-    return [
-      { key: "new", title: t.explore.categoryNew, data: newReleases },
-      { key: "popular", title: t.explore.categoryPopular, data: popular },
-      { key: "comedy", title: t.explore.categoryComedy, data: comedy },
-      { key: "drama", title: t.explore.categoryDrama, data: drama },
-      { key: "kdrama", title: t.explore.categoryKdrama, data: kdrama },
-      { key: "scifi", title: t.explore.categorySciFi, data: sciFi },
-    ].filter((c) => c.data.length > 0);
-  }, [pool, t, preferredGenres]);
-
   function onChangeText(text: string) {
     setQuery(text);
-    clearTimeout(timer);
+    clearTimeout(timer.current);
     if (!text.trim()) {
       setSearchResults([]);
+      setMovieSearchResults([]);
       return;
     }
-    timer = setTimeout(async () => {
-      const data = await searchShows(text);
-      setSearchResults(data.map((d) => d.show));
+    timer.current = setTimeout(async () => {
+      // Neither source failing should block the other's results.
+      const [shows, movies] = await Promise.all([
+        searchShows(text).catch(() => []),
+        searchMovies(text).catch(() => []),
+      ]);
+      setSearchResults(shows.map((d) => d.show));
+      setMovieSearchResults(movies);
     }, 400);
   }
 
@@ -219,6 +248,69 @@ export default function ExploreScreen() {
     });
   }
 
+  // Mirrors quickAdd's toggle-off behavior for shows: tapping the check again
+  // removes the row entirely (regardless of watched/want_to_watch status),
+  // rather than only ever upserting — a card with no way to un-add left the
+  // only way to remove a movie the confusing "unwatch" rewatch-prompt path on
+  // the movie's own detail screen, which deletes a *watched* movie's history
+  // rather than just taking it off the watchlist.
+  async function quickAddMovie(movie: TMDBSearchResult) {
+    const existing = movieTmdbMap.get(movie.id);
+    if (existing) {
+      await removeUserMovie(existing.id);
+      setMovieTmdbMap((prev) => {
+        const next = new Map(prev);
+        next.delete(movie.id);
+        return next;
+      });
+      return;
+    }
+    const year = movie.release_date ? Number(movie.release_date.slice(0, 4)) : null;
+    const row = await addMovieToWatchlist(movie.id, movie.title, year, movie.poster_path);
+    setMovieTmdbMap((prev) => new Map(prev).set(movie.id, row));
+  }
+
+  async function toggleFavoriteMovie(movie: TMDBSearchResult) {
+    const year = movie.release_date ? Number(movie.release_date.slice(0, 4)) : null;
+    const existing = movieTmdbMap.get(movie.id);
+    const row = existing ?? (await addMovieToWatchlist(movie.id, movie.title, year, movie.poster_path));
+    const updated = await setMovieFavorite(row.id, !row.is_favorite);
+    setMovieTmdbMap((prev) => new Map(prev).set(movie.id, updated));
+  }
+
+  // TMDB-sourced show cards (the four discover categories) only ever have a
+  // TMDB id up front — every action on them (open, add, favorite) resolves
+  // to the matching TVmaze show first (see lib/tmdb.ts's
+  // findTvmazeShowFromTmdbTv), same underlying TVmaze id the rest of the app
+  // tracks shows by. Not every TMDB show has a TheTVDB id on file, so a
+  // failed resolution surfaces as a plain alert rather than a silent no-op.
+  async function resolveTvmazeShow(show: TMDBTvResult): Promise<TVMazeShow | null> {
+    const cached = resolvedTvShows.get(show.id);
+    if (cached) return cached;
+    const resolved = await findTvmazeShowFromTmdbTv(show.id);
+    if (!resolved) {
+      Alert.alert(t.explore.noMatchTitle, t.explore.noMatchDesc);
+      return null;
+    }
+    setResolvedTvShows((prev) => new Map(prev).set(show.id, resolved));
+    return resolved;
+  }
+
+  async function openTmdbShow(show: TMDBTvResult) {
+    const resolved = await resolveTvmazeShow(show);
+    if (resolved) router.push(`/show/${resolved.id}`);
+  }
+
+  async function quickAddTmdbShow(show: TMDBTvResult) {
+    const resolved = await resolveTvmazeShow(show);
+    if (resolved) await quickAdd(resolved);
+  }
+
+  async function toggleFavoriteTmdbShow(show: TMDBTvResult) {
+    const resolved = await resolveTvmazeShow(show);
+    if (resolved) await toggleFavorite(resolved);
+  }
+
   const isSearching = !!query.trim();
 
   return (
@@ -240,65 +332,145 @@ export default function ExploreScreen() {
         )}
       </View>
 
-      {loading ? (
-        <ActivityIndicator color={colors.black} style={{ marginTop: 24 }} />
-      ) : isSearching ? (
-        <FlatList
-          data={searchResults}
-          keyExtractor={(show) => String(show.id)}
-          numColumns={2}
-          columnWrapperStyle={styles.row}
-          contentContainerStyle={styles.grid}
-          showsVerticalScrollIndicator={false}
-          ListEmptyComponent={
-            <Text style={styles.placeholder}>{t.explore.noResults(query)}</Text>
-          }
-          renderItem={({ item: show }) => (
-            <ExploreCard
-              show={show}
-              isAdded={addedIds.has(show.id)}
-              isFavorite={favoriteIds.has(show.id)}
-              onPress={() => router.push(`/show/${show.id}`)}
-              onToggleFavorite={() => toggleFavorite(show)}
-              onQuickAdd={() => quickAdd(show)}
-              colors={colors}
-              styles={styles}
-              t={t}
-            />
+      {!isSearching && (
+        <View style={styles.tabsRow}>
+          <Pressable style={styles.tabBtn} onPress={() => setSubTab("shows")}>
+            <Text style={[styles.tabText, subTab === "shows" && styles.tabTextActive]}>{t.tabs.shows}</Text>
+            {subTab === "shows" && <Animated.View style={[styles.tabUnderline, { transform: [{ scaleX: underlineGrow }] }]} />}
+          </Pressable>
+          <Pressable style={styles.tabBtn} onPress={() => setSubTab("movies")}>
+            <Text style={[styles.tabText, subTab === "movies" && styles.tabTextActive]}>{t.tabs.movies}</Text>
+            {subTab === "movies" && <Animated.View style={[styles.tabUnderline, { transform: [{ scaleX: underlineGrow }] }]} />}
+          </Pressable>
+        </View>
+      )}
+
+      {isSearching ? (
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.searchScroll}>
+          {searchResults.length === 0 && movieSearchResults.length === 0 ? (
+            <EmptyState icon="search-outline" title={t.explore.noResults(query)} />
+          ) : (
+            <>
+              {searchResults.length > 0 && (
+                <View style={styles.categorySection}>
+                  <Text style={styles.categoryTitle}>{t.explore.resultsShows}</Text>
+                  <View style={styles.wrapGrid}>
+                    {searchResults.map((show) => (
+                      <View key={show.id} style={styles.wrapGridItem}>
+                        <ExploreCard
+                          show={show}
+                          isAdded={addedIds.has(show.id)}
+                          isFavorite={favoriteIds.has(show.id)}
+                          onPress={() => router.push(`/show/${show.id}`)}
+                          onToggleFavorite={() => toggleFavorite(show)}
+                          onQuickAdd={() => quickAdd(show)}
+                          colors={colors}
+                          styles={styles}
+                          t={t}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+              {movieSearchResults.length > 0 && (
+                <View style={styles.categorySection}>
+                  <Text style={styles.categoryTitle}>{t.explore.resultsMovies}</Text>
+                  <View style={styles.wrapGrid}>
+                    {movieSearchResults.map((movie) => (
+                      <View key={movie.id} style={styles.wrapGridItem}>
+                        <ExploreMovieCard
+                          movie={movie}
+                          isAdded={movieTmdbMap.has(movie.id)}
+                          isFavorite={!!movieTmdbMap.get(movie.id)?.is_favorite}
+                          onPress={() => router.push(`/movie/tmdb/${movie.id}`)}
+                          onToggleFavorite={() => toggleFavoriteMovie(movie)}
+                          onQuickAdd={() => quickAddMovie(movie)}
+                          colors={colors}
+                          styles={styles}
+                        />
+                      </View>
+                    ))}
+                  </View>
+                </View>
+              )}
+            </>
           )}
-        />
+        </ScrollView>
+      ) : subTab === "shows" ? (
+        <ScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={styles.categoriesScroll}
+        >
+          {showCategories.length === 0 ? (
+            <ActivityIndicator color={colors.black} style={{ marginTop: 24 }} />
+          ) : (
+            showCategories.map((category) => (
+              <View key={category.key} style={styles.categorySection}>
+                <Text style={styles.categoryTitle}>{category.title}</Text>
+                <FlatList
+                  data={category.data}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyExtractor={(show) => String(show.id)}
+                  contentContainerStyle={styles.categoryRow}
+                  renderItem={({ item: show }) => {
+                    const resolvedId = resolvedTvShows.get(show.id)?.id;
+                    return (
+                      <View style={styles.categoryCard}>
+                        <ExploreTvCard
+                          show={show}
+                          isAdded={resolvedId !== undefined && addedIds.has(resolvedId)}
+                          isFavorite={resolvedId !== undefined && favoriteIds.has(resolvedId)}
+                          onPress={() => openTmdbShow(show)}
+                          onToggleFavorite={() => toggleFavoriteTmdbShow(show)}
+                          onQuickAdd={() => quickAddTmdbShow(show)}
+                          colors={colors}
+                          styles={styles}
+                        />
+                      </View>
+                    );
+                  }}
+                />
+              </View>
+            ))
+          )}
+        </ScrollView>
       ) : (
         <ScrollView
           showsVerticalScrollIndicator={false}
           contentContainerStyle={styles.categoriesScroll}
         >
-          {categories.map((category) => (
-            <View key={category.key} style={styles.categorySection}>
-              <Text style={styles.categoryTitle}>{category.title}</Text>
-              <FlatList
-                data={category.data}
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                keyExtractor={(show) => String(show.id)}
-                contentContainerStyle={styles.categoryRow}
-                renderItem={({ item: show }) => (
-                  <View style={styles.categoryCard}>
-                    <ExploreCard
-                      show={show}
-                      isAdded={addedIds.has(show.id)}
-                      isFavorite={favoriteIds.has(show.id)}
-                      onPress={() => router.push(`/show/${show.id}`)}
-                      onToggleFavorite={() => toggleFavorite(show)}
-                      onQuickAdd={() => quickAdd(show)}
-                      colors={colors}
-                      styles={styles}
-                      t={t}
-                    />
-                  </View>
-                )}
-              />
-            </View>
-          ))}
+          {movieCategories.length === 0 ? (
+            <ActivityIndicator color={colors.black} style={{ marginTop: 24 }} />
+          ) : (
+            movieCategories.map((category) => (
+              <View key={category.key} style={styles.categorySection}>
+                <Text style={styles.categoryTitle}>{category.title}</Text>
+                <FlatList
+                  data={category.data}
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  keyExtractor={(movie) => String(movie.id)}
+                  contentContainerStyle={styles.categoryRow}
+                  renderItem={({ item: movie }) => (
+                    <View style={styles.categoryCard}>
+                      <ExploreMovieCard
+                        movie={movie}
+                        isAdded={movieTmdbMap.has(movie.id)}
+                        isFavorite={!!movieTmdbMap.get(movie.id)?.is_favorite}
+                        onPress={() => router.push(`/movie/tmdb/${movie.id}`)}
+                        onToggleFavorite={() => toggleFavoriteMovie(movie)}
+                        onQuickAdd={() => quickAddMovie(movie)}
+                        colors={colors}
+                        styles={styles}
+                      />
+                    </View>
+                  )}
+                />
+              </View>
+            ))
+          )}
         </ScrollView>
       )}
     </View>
@@ -395,11 +567,165 @@ function ExploreCard({
   );
 }
 
+// Discover-category card for a TMDB-sourced show (see showCategories above).
+// isAdded/isFavorite only reflect reality once resolvedTvShows has an entry
+// for this card (see resolveTvmazeShow) — resolving every card's TVmaze id
+// up front just to pre-fill the icon would reintroduce the kind of bulk
+// background TVmaze traffic the priority queue was built to avoid. So a card
+// not yet interacted with always starts unfilled, then updates correctly
+// after its first tap (open/add/favorite) resolves and caches its id.
+function ExploreTvCard({
+  show,
+  isAdded,
+  isFavorite,
+  onPress,
+  onToggleFavorite,
+  onQuickAdd,
+  colors,
+  styles,
+}: {
+  show: TMDBTvResult;
+  isAdded: boolean;
+  isFavorite: boolean;
+  onPress: () => void;
+  onToggleFavorite: () => void;
+  onQuickAdd: () => void;
+  colors: Colors;
+  styles: ExploreStyles;
+}) {
+  const { scale, onPressIn, onPressOut } = useScalePress();
+  const mountIn = useMountIn();
+  const poster = posterUrl(show.poster_path);
+  const year = show.first_air_date ? show.first_air_date.slice(0, 4) : "";
+
+  return (
+    <Pressable style={styles.card} onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress}>
+      <Animated.View style={{ opacity: mountIn.opacity, transform: [...mountIn.transform, { scale }] }}>
+        <View style={styles.cardImageWrap}>
+          {poster ? (
+            <Image source={{ uri: poster }} style={styles.cardImage} resizeMode="cover" />
+          ) : (
+            <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
+              <Text style={styles.cardPlaceholderText}>{show.name[0]?.toUpperCase()}</Text>
+            </View>
+          )}
+          <View style={styles.cardActions}>
+            <Pressable
+              style={styles.iconBtn}
+              onPress={(e) => {
+                e.stopPropagation();
+                onToggleFavorite();
+              }}
+            >
+              <Ionicons
+                name={isFavorite ? "heart" : "heart-outline"}
+                size={15}
+                color={isFavorite ? colors.red : "#fff"}
+              />
+            </Pressable>
+            <Pressable
+              style={[styles.iconBtn, isAdded && styles.iconBtnActive]}
+              onPress={(e) => {
+                e.stopPropagation();
+                onQuickAdd();
+              }}
+            >
+              <Ionicons name={isAdded ? "checkmark" : "add"} size={16} color={isAdded ? colors.onAccent : "#fff"} />
+            </Pressable>
+          </View>
+        </View>
+        <Text style={styles.cardTitle} numberOfLines={1}>
+          {show.name}
+        </Text>
+        <Text style={styles.cardMeta} numberOfLines={1}>
+          {year}
+          {show.vote_average ? ` · ⭐ ${show.vote_average.toFixed(1)}` : ""}
+        </Text>
+      </Animated.View>
+    </Pressable>
+  );
+}
+
+// Mirrors ExploreCard's add/favorite icons, but "add" means "add to watchlist"
+// (status='want_to_watch') rather than an immediate watch — there's no
+// TVmaze-style "watching" concept for movies, just watched vs. not yet.
+function ExploreMovieCard({
+  movie,
+  isAdded,
+  isFavorite,
+  onPress,
+  onToggleFavorite,
+  onQuickAdd,
+  colors,
+  styles,
+}: {
+  movie: TMDBSearchResult;
+  isAdded: boolean;
+  isFavorite: boolean;
+  onPress: () => void;
+  onToggleFavorite: () => void;
+  onQuickAdd: () => void;
+  colors: Colors;
+  styles: ExploreStyles;
+}) {
+  const { scale, onPressIn, onPressOut } = useScalePress();
+  const mountIn = useMountIn();
+  const poster = posterUrl(movie.poster_path);
+  const year = movie.release_date ? movie.release_date.slice(0, 4) : "";
+
+  return (
+    <Pressable style={styles.card} onPressIn={onPressIn} onPressOut={onPressOut} onPress={onPress}>
+      <Animated.View style={{ opacity: mountIn.opacity, transform: [...mountIn.transform, { scale }] }}>
+        <View style={styles.cardImageWrap}>
+          {poster ? (
+            <Image source={{ uri: poster }} style={styles.cardImage} resizeMode="cover" />
+          ) : (
+            <View style={[styles.cardImage, styles.cardImagePlaceholder]}>
+              <Text style={styles.cardPlaceholderText}>{movie.title[0]?.toUpperCase()}</Text>
+            </View>
+          )}
+          <View style={styles.cardActions}>
+            <Pressable
+              style={styles.iconBtn}
+              onPress={(e) => {
+                e.stopPropagation();
+                onToggleFavorite();
+              }}
+            >
+              <Ionicons
+                name={isFavorite ? "heart" : "heart-outline"}
+                size={15}
+                color={isFavorite ? colors.red : "#fff"}
+              />
+            </Pressable>
+            <Pressable
+              style={[styles.iconBtn, isAdded && styles.iconBtnActive]}
+              onPress={(e) => {
+                e.stopPropagation();
+                onQuickAdd();
+              }}
+            >
+              <Ionicons name={isAdded ? "checkmark" : "add"} size={16} color={isAdded ? colors.onAccent : "#fff"} />
+            </Pressable>
+          </View>
+        </View>
+        <Text style={styles.cardTitle} numberOfLines={1}>
+          {movie.title}
+        </Text>
+        <Text style={styles.cardMeta} numberOfLines={1}>
+          {year}
+          {movie.vote_average ? ` · ⭐ ${movie.vote_average.toFixed(1)}` : ""}
+        </Text>
+      </Animated.View>
+    </Pressable>
+  );
+}
+
 function createStyles(colors: Colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
     title: {
-      fontSize: 22,
+      fontSize: type.title,
       fontWeight: "800",
       color: colors.text,
       paddingHorizontal: 16,
@@ -416,13 +742,26 @@ function createStyles(colors: Colors) {
       backgroundColor: colors.backgroundAlt,
       borderRadius: radius.sm,
     },
-    searchInput: { flex: 1, fontSize: 16, color: colors.text },
+    searchInput: { flex: 1, fontSize: type.input, color: colors.text },
+    tabsRow: {
+      flexDirection: "row",
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+      marginTop: 14,
+    },
+    tabBtn: { flex: 1, alignItems: "center", paddingVertical: 12 },
+    tabText: { fontWeight: "800", fontSize: 13, color: colors.textFaint, letterSpacing: 0.4 },
+    tabTextActive: { color: colors.accent },
+    tabUnderline: { height: 2, backgroundColor: colors.accent, width: "60%", marginTop: 6 },
+    searchScroll: { paddingTop: 16, paddingBottom: 24 },
     grid: { padding: 16, paddingTop: 8, gap: 16 },
     row: { gap: 16 },
+    wrapGrid: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: 16, gap: 16 },
+    wrapGridItem: { width: 150 },
     categoriesScroll: { paddingTop: 16, paddingBottom: 24 },
     categorySection: { marginBottom: 20 },
     categoryTitle: {
-      fontSize: 17,
+      fontSize: type.subtitle,
       fontWeight: "800",
       color: colors.text,
       paddingHorizontal: 16,
@@ -438,7 +777,8 @@ function createStyles(colors: Colors) {
       borderRadius: radius.md,
       backgroundColor: colors.backgroundAlt,
     },
-    cardImagePlaceholder: { backgroundColor: colors.backgroundAlt },
+    cardImagePlaceholder: { backgroundColor: colors.backgroundAlt, alignItems: "center", justifyContent: "center" },
+    cardPlaceholderText: { color: colors.textFaint, fontSize: type.display, fontWeight: "800" },
     cardActions: { position: "absolute", top: 8, right: 8, gap: 6 },
     iconBtn: {
       width: 26,
@@ -456,10 +796,5 @@ function createStyles(colors: Colors) {
       marginTop: 8,
     },
     cardMeta: { color: colors.textMuted, fontSize: 11, marginTop: 1 },
-    placeholder: {
-      color: colors.textMuted,
-      textAlign: "center",
-      marginTop: 40,
-    },
   });
 }

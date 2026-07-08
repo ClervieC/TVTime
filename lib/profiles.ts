@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 
 export interface Profile {
   user_id: string;
@@ -6,8 +6,7 @@ export interface Profile {
 }
 
 export async function fetchMyProfile(): Promise<Profile | null> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) return null;
 
   const { data, error } = await supabase.from("profiles").select("*").eq("user_id", userId).maybeSingle();
@@ -16,8 +15,7 @@ export async function fetchMyProfile(): Promise<Profile | null> {
 }
 
 export async function createProfile(username: string): Promise<Profile> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { data, error } = await supabase
@@ -43,8 +41,7 @@ export async function fetchProfiles(userIds: string[]): Promise<Profile[]> {
 }
 
 export async function searchProfiles(query: string): Promise<Profile[]> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
 
   const { data, error } = await supabase
     .from("profiles")

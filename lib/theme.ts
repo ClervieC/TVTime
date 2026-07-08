@@ -67,3 +67,51 @@ export const radius = {
 };
 
 export const spacing = (n: number) => n * 4;
+
+// Every font size in the app should be one of these eight. `input` is the one
+// deliberate exception to "smallest is best" — text inputs stay at 16 to
+// avoid iOS Safari's auto-zoom-on-focus behavior, so don't shrink it.
+// `subtitle` is for section headers *within* a screen ("Info", "Cast",
+// "Nouveautés"); `title` is for the screen's own identity — there's usually
+// one of those per screen, and several of the former.
+export const type = {
+  micro: 11,
+  caption: 12,
+  bodySm: 13,
+  body: 14,
+  input: 16,
+  subtitle: 17,
+  title: 20,
+  display: 26,
+};
+
+// Ionicons `size` prop — inline/meta icons, default action icons, and
+// hero/prominent icons. Avatars are a separate scale (see avatarSize) since
+// they're photos/initials, not glyphs.
+export const iconSize = {
+  sm: 16,
+  md: 20,
+  lg: 28,
+};
+
+// Matches the pixel sizes every pre-existing hand-rolled avatar circle used
+// (UserRow/notifications: 40px, profile header/cast: 64px, other-user
+// profile: 84px) — don't shrink these without checking every call site.
+export const avatarSize = {
+  sm: 40,
+  md: 64,
+  lg: 84,
+};
+
+// Rotates posterless movie cards through a handful of the app's existing
+// semantic hues instead of one flat gray box repeated hundreds of times —
+// same trick as a Slack/Gmail avatar, picked deterministically from the
+// title so a given movie always lands on the same tint. Shared by MovieCard
+// and the movie detail screen, so both use the same color for the same film.
+const POSTER_HUES = ["accent", "blue", "green", "red", "yellow"] as const;
+
+export function hueForTitle(title: string): (typeof POSTER_HUES)[number] {
+  let hash = 0;
+  for (let i = 0; i < title.length; i++) hash = (hash * 31 + title.charCodeAt(i)) | 0;
+  return POSTER_HUES[Math.abs(hash) % POSTER_HUES.length];
+}

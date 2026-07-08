@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -18,6 +18,7 @@ import {
   fetchWatchedEpisodes,
   fetchWatchedEpisodesPage,
   incrementRewatch,
+  rateEpisode,
   setEpisodeWatched,
   UserShow,
   WatchedEpisode,
@@ -27,11 +28,15 @@ import { mapWithConcurrency } from "../../lib/concurrency";
 import {
   diffDaysFromToday,
   formatTime,
+  localDateKey,
   todayISODate,
   upcomingGroupKey,
   upcomingGroupLabel,
 } from "../../lib/dates";
 import { EpisodeRow } from "../../components/EpisodeRow";
+import { FeelingSheet } from "../../components/FeelingSheet";
+import { Pill } from "../../components/Pill";
+import { EmptyState } from "../../components/EmptyState";
 import { useColors, radius, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { useGrowIn, useFadeIn } from "../../lib/animations";
@@ -53,7 +58,106 @@ interface EnrichedEpisode {
   isNew?: boolean;
   extraEpisodes?: number;
   timesWatched?: number;
+  // Full series episode count — only set for "Not started" rows, where
+  // there's no watch progress yet to summarize instead.
+  totalEpisodes?: number;
 }
+
+type EnrichedShowResult =
+  | { kind: "none" }
+  | { kind: "started"; item: EnrichedEpisode }
+  | { kind: "notStarted"; item: EnrichedEpisode };
+
+// Pure function of one show's tracked data — factored out of the watchNext/
+// haventStarted useMemo so it can be called only for shows that actually
+// changed (see enrichedCacheRef), rather than for every tracked show on
+// every recompute.
+function computeEnrichedForShow(t: TrackedShow, now: number): EnrichedShowResult {
+  const { show, episodes, watchedIds, watchedList } = t;
+  const aired = episodes.filter((e) => new Date(e.airstamp).getTime() <= now);
+  const nextEpisode = [...aired]
+    .sort((a, b) => a.season - b.season || a.number - b.number)
+    .find((e) => !watchedIds.has(e.id));
+  if (!nextEpisode) return { kind: "none" };
+
+  // Shows with zero watch history yet are "haven't started" — kept
+  // separate from Watch Next so newly-added shows don't crowd it out.
+  if (watchedList.length === 0) {
+    return {
+      kind: "notStarted",
+      item: { show, episode: nextEpisode, watched: false, totalEpisodes: episodes.length },
+    };
+  }
+
+  const lastAired = aired.reduce<TVMazeEpisode | null>((latest, e) => {
+    if (!latest) return e;
+    return new Date(e.airstamp).getTime() > new Date(latest.airstamp).getTime() ? e : latest;
+  }, null);
+  const isLastEpisode = lastAired?.id === nextEpisode.id;
+  const isNew = isLastEpisode && diffDaysFromToday(nextEpisode.airstamp) >= -6;
+  const extraEpisodes = aired.filter((e) => !watchedIds.has(e.id)).length - 1;
+  const lastWatchedAt = watchedList.reduce<number>((max, w) => {
+    const time = new Date(w.watched_at).getTime();
+    return time > max ? time : max;
+  }, 0);
+
+  return {
+    kind: "started",
+    item: {
+      show,
+      episode: nextEpisode,
+      watched: false,
+      watchedAt: lastWatchedAt ? new Date(lastWatchedAt).toISOString() : undefined,
+      isNew,
+      extraEpisodes: extraEpisodes > 0 ? extraEpisodes : undefined,
+    },
+  };
+}
+
+type ShowsStyles = ReturnType<typeof createStyles>;
+
+interface WatchListEpisodeRowProps {
+  item: EnrichedEpisode;
+  dimmed?: boolean;
+  onToggleWatched: (item: EnrichedEpisode) => void;
+  onRewatch?: (item: EnrichedEpisode) => void;
+  styles: ShowsStyles;
+}
+
+// Memoized wrapper so an unaffected row (same `item` reference — see
+// enrichedCacheRef in ShowsScreen — and the same stable onToggleWatched/
+// onRewatch function references) skips re-rendering entirely, rather than
+// every visible EpisodeRow (with its own Swipeable/gesture handler and
+// image) re-rendering whenever any one show's watched state changes.
+const WatchListEpisodeRow = memo(function WatchListEpisodeRow({
+  item,
+  dimmed,
+  onToggleWatched,
+  onRewatch,
+  styles,
+}: WatchListEpisodeRowProps) {
+  return (
+    <View style={styles.watchListRowWrap}>
+      <EpisodeRow
+        showId={item.show.tvmaze_id}
+        showName={item.show.show_name}
+        showImage={item.show.show_image}
+        episodeId={item.episode.id}
+        season={item.episode.season}
+        number={item.episode.number}
+        extraEpisodes={item.extraEpisodes}
+        totalEpisodes={item.totalEpisodes}
+        title={item.episode.name}
+        isNew={item.isNew}
+        watched={item.watched}
+        timesWatched={item.timesWatched}
+        dimmed={dimmed}
+        onToggleWatched={() => onToggleWatched(item)}
+        onRewatch={onRewatch ? () => onRewatch(item) : undefined}
+      />
+    </View>
+  );
+});
 
 type UpcomingRow =
   | { type: "header"; key: string; label: string }
@@ -73,10 +177,12 @@ type WatchListRow =
   | { type: "notStartedHeader" }
   | { type: "notStartedItem"; item: EnrichedEpisode };
 
-// On a cold cache, fetching every followed show's episodes at once would fire
-// one TVmaze request per show and can blow through their ~20 req/10s rate
-// limit for anyone following more than a handful of shows.
-const TRACKED_SHOW_FETCH_CONCURRENCY = 6;
+// The TVmaze half of each show's fetch (getShowEpisodes) is paced by the
+// shared rate limiter in lib/tvmaze.ts regardless of this value — raising it
+// doesn't speed that half up. It only benefits the unthrottled Supabase half
+// (fetchWatchedEpisodes), which is where the wins from 6 -> 10 actually come
+// from.
+const TRACKED_SHOW_FETCH_CONCURRENCY = 10;
 
 const HISTORY_PAGE_SIZE = 20;
 // Scrolling within this many pixels of the top triggers loading the next
@@ -130,12 +236,31 @@ export default function ShowsScreen() {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [upcomingPastDays, setUpcomingPastDays] = useState(UPCOMING_INITIAL_PAST_DAYS);
+  // Set right after marking an episode watched (never on unwatch) — opens
+  // the quick feeling picker for that specific episode. Tapping outside
+  // (Sheet's backdrop) or picking nothing just closes it without saving.
+  const [feelingPromptItem, setFeelingPromptItem] = useState<EnrichedEpisode | null>(null);
   const listRef = useRef<FlatList<WatchListRow>>(null);
   const upcomingListRef = useRef<FlatList<UpcomingRow>>(null);
   const hasLoadedOnce = useRef(false);
   const watchListScrollY = useRef(0);
   const upcomingScrollY = useRef(0);
   const pendingPastLoad = useRef<number | null>(null);
+  // React state updates aren't synchronous — two onScroll events dispatched
+  // in the same batching window could both read loadingHistory as still
+  // false and both fire a fetch for the same page. This ref closes that gap;
+  // loadingHistory state stays too, purely to drive the spinner.
+  const loadingHistoryRef = useRef(false);
+  // Per-show cache for the watchNext/haventStarted memo below, keyed by
+  // tvmaze_id. toggleWatched/rewatchEpisode already rebuild `tracked` with a
+  // new TrackedShow object only for the one show that actually changed
+  // (every other show keeps its exact previous reference) — reusing that,
+  // this cache lets an unaffected show's EnrichedEpisode object stay the
+  // exact same reference across a re-render instead of a brand new object
+  // being constructed for every tracked show every time any one of them
+  // changes. That object-identity stability is what lets WatchListEpisodeRow's
+  // memo() below actually skip re-rendering rows nothing happened to.
+  const enrichedCacheRef = useRef(new Map<number, { input: TrackedShow; result: EnrichedShowResult }>());
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, language } = useLanguage();
@@ -158,18 +283,23 @@ export default function ShowsScreen() {
   // skip the network entirely instead of re-fetching every followed show's
   // episodes/watched rows on every focus.
   async function fetchTrackedShow(show: UserShow): Promise<TrackedShow> {
-    try {
-      const episodes = await getCachedEpisodes(show.tvmaze_id, () => getShowEpisodes(show.tvmaze_id));
-      const watchedList = await getCachedWatchedEpisodes(show.tvmaze_id, () => fetchWatchedEpisodes(show.tvmaze_id));
-      return {
-        show,
-        episodes,
-        watchedIds: new Set(watchedList.map((w) => w.tvmaze_episode_id)),
-        watchedList,
-      };
-    } catch {
-      return { show, episodes: [], watchedIds: new Set(), watchedList: [] };
-    }
+    // Episodes (TVmaze) and watched status (Supabase) are independent —
+    // fetching them one after the other doubled the latency per show for no
+    // reason. They're also independently allowed to fail: settling instead
+    // of Promise.all-ing means a TVmaze hiccup doesn't throw away watched
+    // status that Supabase already returned successfully, and vice versa.
+    const [episodesResult, watchedResult] = await Promise.allSettled([
+      getCachedEpisodes(show.tvmaze_id, () => getShowEpisodes(show.tvmaze_id)),
+      getCachedWatchedEpisodes(show.tvmaze_id, () => fetchWatchedEpisodes(show.tvmaze_id)),
+    ]);
+    const episodes = episodesResult.status === "fulfilled" ? episodesResult.value : [];
+    const watchedList = watchedResult.status === "fulfilled" ? watchedResult.value : [];
+    return {
+      show,
+      episodes,
+      watchedIds: new Set(watchedList.map((w) => w.tvmaze_episode_id)),
+      watchedList,
+    };
   }
 
   const loadData = useCallback(async () => {
@@ -177,16 +307,10 @@ export default function ShowsScreen() {
       setLoading(true);
     }
 
-    const shows = await fetchUserShows();
-    const followed = shows.filter(
-      (s) => s.status === "watching" || s.status === "want_to_watch",
-    );
-
-    const results = await mapWithConcurrency(followed, TRACKED_SHOW_FETCH_CONCURRENCY, fetchTrackedShow);
-
-    setTracked(results);
-    setLoading(false);
-    hasLoadedOnce.current = true;
+    // Reset upfront (rather than after every show has loaded below) so the
+    // list is coherent as soon as the very first batch of tracked-show data
+    // arrives, instead of mixing fresh data with the previous load's stale
+    // history/upcoming state until the whole batch finishes.
     // Watched history is intentionally not loaded here — it's fetched lazily,
     // a page at a time, only once the user scrolls up toward it.
     setHistoryItems([]);
@@ -201,6 +325,43 @@ export default function ShowsScreen() {
     // re-triggering the history/past-upcoming load.
     watchListScrollY.current = 0;
     upcomingScrollY.current = 0;
+
+    const shows = await fetchUserShows();
+    // Shows already being watched go first in the fetch queue — that's what
+    // populates Watch Next and History, the two sections actually visible on
+    // load. Shows not started yet only feed "Not started", which the user is
+    // less likely to be checking first, so they can trail in behind.
+    const watching = shows.filter((s) => s.status === "watching");
+    const wantToWatch = shows.filter((s) => s.status === "want_to_watch");
+    const followed = [...watching, ...wantToWatch];
+
+    // Render shows as their data arrives instead of blocking on the very
+    // last one to resolve — with a couple hundred tracked shows, the TVmaze
+    // rate limit alone can take minutes to clear on a cold cache, and there
+    // was no reason to hold the whole screen on a spinner while most shows
+    // were already done. Flushes are coalesced to one per animation frame
+    // rather than one per show, so this doesn't turn into 200+ re-renders.
+    const collected: TrackedShow[] = [];
+    let flushScheduled = false;
+    function flush() {
+      flushScheduled = false;
+      setTracked([...collected]);
+      setLoading(false);
+      hasLoadedOnce.current = true;
+    }
+    function scheduleFlush() {
+      if (flushScheduled) return;
+      flushScheduled = true;
+      requestAnimationFrame(flush);
+    }
+
+    await mapWithConcurrency(followed, TRACKED_SHOW_FETCH_CONCURRENCY, fetchTrackedShow, (result) => {
+      collected.push(result);
+      scheduleFlush();
+    });
+    // Final flush covers both the trailing rAF-coalesced items and the
+    // followed.length === 0 case, where onItemDone never fires at all.
+    flush();
   }, []);
 
   useFocusEffect(
@@ -225,7 +386,8 @@ export default function ShowsScreen() {
   }
 
   async function loadMoreHistory() {
-    if (loadingHistory || !hasMoreHistory) return;
+    if (loadingHistoryRef.current || !hasMoreHistory) return;
+    loadingHistoryRef.current = true;
     setLoadingHistory(true);
     try {
       const page = await fetchWatchedEpisodesPage(historyOffset, HISTORY_PAGE_SIZE);
@@ -263,6 +425,7 @@ export default function ShowsScreen() {
         });
       });
     } finally {
+      loadingHistoryRef.current = false;
       setLoadingHistory(false);
     }
   }
@@ -332,43 +495,23 @@ export default function ShowsScreen() {
     const now = Date.now();
     const started: EnrichedEpisode[] = [];
     const notStarted: EnrichedEpisode[] = [];
-    for (const { show, episodes, watchedIds, watchedList } of tracked) {
-      const aired = episodes.filter((e) => new Date(e.airstamp).getTime() <= now);
-      const nextEpisode = [...aired]
-        .sort((a, b) => a.season - b.season || a.number - b.number)
-        .find((e) => !watchedIds.has(e.id));
-      if (!nextEpisode) continue;
+    const cache = enrichedCacheRef.current;
+    const nextCache = new Map<number, { input: TrackedShow; result: EnrichedShowResult }>();
 
-      // Shows with zero watch history yet are "haven't started" — kept
-      // separate from Watch Next so newly-added shows don't crowd it out.
-      if (watchedList.length === 0) {
-        notStarted.push({ show, episode: nextEpisode, watched: false });
-        continue;
-      }
-
-      const lastAired = aired.reduce<TVMazeEpisode | null>((latest, e) => {
-        if (!latest) return e;
-        return new Date(e.airstamp).getTime() > new Date(latest.airstamp).getTime() ? e : latest;
-      }, null);
-      const isLastEpisode = lastAired?.id === nextEpisode.id;
-      const isNew = isLastEpisode && diffDaysFromToday(nextEpisode.airdate) >= -6;
-
-      const extraEpisodes = aired.filter((e) => !watchedIds.has(e.id)).length - 1;
-
-      const lastWatchedAt = watchedList.reduce<number>((max, w) => {
-        const t = new Date(w.watched_at).getTime();
-        return t > max ? t : max;
-      }, 0);
-
-      started.push({
-        show,
-        episode: nextEpisode,
-        watched: false,
-        watchedAt: lastWatchedAt ? new Date(lastWatchedAt).toISOString() : undefined,
-        isNew,
-        extraEpisodes: extraEpisodes > 0 ? extraEpisodes : undefined,
-      });
+    for (const t of tracked) {
+      const showId = t.show.tvmaze_id;
+      const cached = cache.get(showId);
+      // Reusing the cached result (same EnrichedEpisode object reference) when
+      // this show's TrackedShow itself is unchanged is what lets unaffected
+      // rows keep stable identity across a re-render — toggleWatched/
+      // rewatchEpisode below only ever build a new TrackedShow for the one
+      // show that actually changed, every other show keeps its old reference.
+      const result = cached && cached.input === t ? cached.result : computeEnrichedForShow(t, now);
+      nextCache.set(showId, { input: t, result });
+      if (result.kind === "started") started.push(result.item);
+      else if (result.kind === "notStarted") notStarted.push(result.item);
     }
+    enrichedCacheRef.current = nextCache;
 
     started.sort((a, b) => {
       if (!!a.isNew !== !!b.isNew) return a.isNew ? -1 : 1;
@@ -388,7 +531,7 @@ export default function ShowsScreen() {
         // Rendering every past episode a long-running show ever aired (hundreds
         // of rows) is unnecessary noise — only the current past window is
         // shown, widened lazily as the user scrolls up (see loadMorePastUpcoming).
-        if (diffDaysFromToday(ep.airdate) < -upcomingPastDays) continue;
+        if (diffDaysFromToday(ep.airstamp) < -upcomingPastDays) continue;
         result.push({
           show,
           episode: ep,
@@ -405,10 +548,14 @@ export default function ShowsScreen() {
     return result;
   }, [tracked, upcomingPastDays]);
 
-  async function toggleWatched(item: EnrichedEpisode) {
-    const currentlyWatched = tracked
-      .find((t) => t.show.tvmaze_id === item.show.tvmaze_id)
-      ?.watchedIds.has(item.episode.id);
+  // Stable (empty deps) so that WatchListEpisodeRow's memo() below can
+  // actually bail out for unaffected rows — reads item.watched/
+  // item.timesWatched (an accurate snapshot as of the row's own render,
+  // exactly like the previous tracked.find() lookup was) instead of closing
+  // over `tracked`, which would otherwise change this function's identity
+  // on every single toggle.
+  const toggleWatched = useCallback(async (item: EnrichedEpisode) => {
+    const currentlyWatched = item.watched;
 
     const result = await setEpisodeWatched({
       tvmaze_show_id: item.show.tvmaze_id,
@@ -435,13 +582,37 @@ export default function ShowsScreen() {
         return { ...t, watchedIds: nextIds, watchedList: nextList };
       }),
     );
-  }
 
-  async function rewatchEpisode(item: EnrichedEpisode) {
-    const show = tracked.find((t) => t.show.tvmaze_id === item.show.tvmaze_id);
-    const entry = show?.watchedList.find((w) => w.tvmaze_episode_id === item.episode.id);
-    if (!entry) return;
-    const result = await incrementRewatch(item.episode.id, entry.times_watched);
+    // Only on the unwatched -> watched transition, never on unwatch or on a
+    // rewatch (which goes through the WatchedCheck rewatch prompt instead).
+    if (!currentlyWatched) setFeelingPromptItem(item);
+  }, []);
+
+  const handleQuickFeeling = useCallback(
+    async (feelingKey: string) => {
+      const item = feelingPromptItem;
+      setFeelingPromptItem(null);
+      if (!item) return;
+      await rateEpisode(item.show.tvmaze_id, item.episode.id, null, feelingKey);
+      setTracked((prev) =>
+        prev.map((t) =>
+          t.show.tvmaze_id !== item.show.tvmaze_id
+            ? t
+            : {
+                ...t,
+                watchedList: t.watchedList.map((w) =>
+                  w.tvmaze_episode_id === item.episode.id ? { ...w, feeling: feelingKey } : w
+                ),
+              }
+        )
+      );
+    },
+    [feelingPromptItem]
+  );
+
+  const rewatchEpisode = useCallback(async (item: EnrichedEpisode) => {
+    if (item.timesWatched === undefined) return;
+    const result = await incrementRewatch(item.episode.id, item.timesWatched);
     setTracked((prev) =>
       prev.map((t) =>
         t.show.tvmaze_id !== item.show.tvmaze_id
@@ -457,7 +628,7 @@ export default function ShowsScreen() {
     setHistoryItems((prev) =>
       prev.map((h) => (h.episode.id === item.episode.id ? { ...h, timesWatched: result.times_watched } : h))
     );
-  }
+  }, []);
 
   function toggleGroup(key: string) {
     setExpandedGroups((prev) => {
@@ -514,89 +685,47 @@ export default function ShowsScreen() {
     }
   }
 
-  function renderWatchListRow({ item: row }: { item: WatchListRow }) {
-    switch (row.type) {
-      case "historyHeader":
-        return (
-          <View style={styles.groupHeaderRow}>
-            <View style={styles.groupPill}>
-              <Text style={styles.groupPillText}>{t.shows.history}</Text>
+  const renderWatchListRow = useCallback(
+    ({ item: row }: { item: WatchListRow }) => {
+      switch (row.type) {
+        case "historyHeader":
+          return (
+            <View style={styles.groupHeaderRow}>
+              <Pill uppercase>{t.shows.history}</Pill>
             </View>
-          </View>
-        );
-      case "historyItem":
-        return (
-          <View style={styles.watchListRowWrap}>
-            <EpisodeRow
-              showId={row.item.show.tvmaze_id}
-              showName={row.item.show.show_name}
-              showImage={row.item.show.show_image}
-              episodeId={row.item.episode.id}
-              season={row.item.episode.season}
-              number={row.item.episode.number}
-              title={row.item.episode.name}
-              watched={row.item.watched}
-              timesWatched={row.item.timesWatched}
+          );
+        case "historyItem":
+          return (
+            <WatchListEpisodeRow
+              item={row.item}
               dimmed
-              onToggleWatched={() => toggleWatched(row.item)}
-              onRewatch={() => rewatchEpisode(row.item)}
+              onToggleWatched={toggleWatched}
+              onRewatch={rewatchEpisode}
+              styles={styles}
             />
-          </View>
-        );
-      case "watchNextHeader":
-        return (
-          <View style={styles.groupHeaderRow}>
-            <View style={styles.groupPill}>
-              <Text style={styles.groupPillText}>{t.shows.watchNext}</Text>
+          );
+        case "watchNextHeader":
+          return (
+            <View style={styles.groupHeaderRow}>
+              <Pill uppercase>{t.shows.watchNext}</Pill>
             </View>
-          </View>
-        );
-      case "watchNextEmpty":
-        return <Text style={styles.empty}>{t.shows.emptyWatchList}</Text>;
-      case "watchNextItem":
-        return (
-          <View style={styles.watchListRowWrap}>
-            <EpisodeRow
-              showId={row.item.show.tvmaze_id}
-              showName={row.item.show.show_name}
-              showImage={row.item.show.show_image}
-              episodeId={row.item.episode.id}
-              season={row.item.episode.season}
-              number={row.item.episode.number}
-              title={row.item.episode.name}
-              watched={row.item.watched}
-              isNew={row.item.isNew}
-              extraEpisodes={row.item.extraEpisodes}
-              onToggleWatched={() => toggleWatched(row.item)}
-            />
-          </View>
-        );
-      case "notStartedHeader":
-        return (
-          <View style={styles.groupHeaderRow}>
-            <View style={styles.groupPill}>
-              <Text style={styles.groupPillText}>{t.shows.notStarted}</Text>
+          );
+        case "watchNextEmpty":
+          return <Text style={styles.empty}>{t.shows.emptyWatchList}</Text>;
+        case "watchNextItem":
+          return <WatchListEpisodeRow item={row.item} onToggleWatched={toggleWatched} styles={styles} />;
+        case "notStartedHeader":
+          return (
+            <View style={styles.groupHeaderRow}>
+              <Pill uppercase>{t.shows.notStarted}</Pill>
             </View>
-          </View>
-        );
-      case "notStartedItem":
-        return (
-          <View style={styles.watchListRowWrap}>
-            <EpisodeRow
-              showId={row.item.show.tvmaze_id}
-              showName={row.item.show.show_name}
-              showImage={row.item.show.show_image}
-              episodeId={row.item.episode.id}
-              season={row.item.episode.season}
-              number={row.item.episode.number}
-              title={row.item.episode.name}
-              watched={row.item.watched}
-              onToggleWatched={() => toggleWatched(row.item)}
-            />
-          </View>
-        );
-    }
-  }
+          );
+        case "notStartedItem":
+          return <WatchListEpisodeRow item={row.item} onToggleWatched={toggleWatched} styles={styles} />;
+      }
+    },
+    [styles, t, toggleWatched, rewatchEpisode],
+  );
 
   // Keyed by the actual calendar date (or LATER/EARLIER) so dates that share
   // a display label across different years never collapse into one group.
@@ -605,7 +734,7 @@ export default function ShowsScreen() {
       const groupedUpcomingMap = upcoming.reduce<
         Record<string, EnrichedEpisode[]>
       >((acc, item) => {
-        const key = upcomingGroupKey(item.episode.airdate);
+        const key = upcomingGroupKey(item.episode.airstamp);
         acc[key] = acc[key] ?? [];
         acc[key].push(item);
         return acc;
@@ -620,7 +749,7 @@ export default function ShowsScreen() {
       const offsetByKey: Record<string, number> = { [todayKey]: 0 };
       for (const [key, items] of Object.entries(groupedUpcomingMap)) {
         for (const item of items) {
-          const offset = diffDaysFromToday(item.episode.airdate);
+          const offset = diffDaysFromToday(item.episode.airstamp);
           if (
             offsetByKey[key] === undefined ||
             Math.abs(offset) < Math.abs(offsetByKey[key])
@@ -641,7 +770,7 @@ export default function ShowsScreen() {
         flatData.push({
           type: "header",
           key: dayKey,
-          label: upcomingGroupLabel(dayKey, items[0]?.episode.airdate ?? dayKey, language),
+          label: upcomingGroupLabel(dayKey, items[0]?.episode.airstamp ?? dayKey, language),
         });
         if (items.length === 0) {
           flatData.push({ type: "empty" });
@@ -649,18 +778,20 @@ export default function ShowsScreen() {
 
         // Group episodes airing on the exact same calendar day for the same
         // show. Buckets like LATER/EARLIER lump several distinct real dates
-        // under one label, so grouping must key off the actual airdate, not
-        // just the (coarser) day-group key, or unrelated dates would merge.
+        // under one label, so grouping must key off the actual local date
+        // (not just the coarser day-group key, or unrelated dates would
+        // merge — and not the raw airdate, which is in the show's broadcast
+        // timezone rather than the viewer's local one).
         const byShowAndDate = new Map<string, EnrichedEpisode[]>();
         for (const item of items) {
-          const subKey = `${item.episode.airdate}__${item.show.tvmaze_id}`;
+          const subKey = `${localDateKey(item.episode.airstamp)}__${item.show.tvmaze_id}`;
           const arr = byShowAndDate.get(subKey) ?? [];
           arr.push(item);
           byShowAndDate.set(subKey, arr);
         }
         const emitted = new Set<string>();
         for (const item of items) {
-          const subKey = `${item.episode.airdate}__${item.show.tvmaze_id}`;
+          const subKey = `${localDateKey(item.episode.airstamp)}__${item.show.tvmaze_id}`;
           if (emitted.has(subKey)) continue;
           emitted.add(subKey);
           const group = byShowAndDate.get(subKey)!;
@@ -713,7 +844,7 @@ export default function ShowsScreen() {
     if (row.type === "group") {
       const first = row.items[0];
       const isFuture = new Date(first.episode.airstamp).getTime() > Date.now();
-      const daysOut = diffDaysFromToday(first.episode.airdate);
+      const daysOut = diffDaysFromToday(first.episode.airstamp);
       const isFarFuture = isFuture && daysOut >= 7;
       const groupKey = row.key;
       const expanded = expandedGroups.has(groupKey);
@@ -743,7 +874,7 @@ export default function ShowsScreen() {
     if (row.type === "groupChild") {
       const item = row.item;
       const isFuture = new Date(item.episode.airstamp).getTime() > Date.now();
-      const daysOut = diffDaysFromToday(item.episode.airdate);
+      const daysOut = diffDaysFromToday(item.episode.airstamp);
       const isFarFuture = isFuture && daysOut >= 7;
       return (
         <View style={[styles.upcomingRowWrap, styles.groupChildWrap]}>
@@ -768,7 +899,7 @@ export default function ShowsScreen() {
     }
     const item = row.item;
     const isFuture = new Date(item.episode.airstamp).getTime() > Date.now();
-    const daysOut = diffDaysFromToday(item.episode.airdate);
+    const daysOut = diffDaysFromToday(item.episode.airstamp);
     const isFarFuture = isFuture && daysOut >= 7;
     return (
       <View style={styles.upcomingRowWrap}>
@@ -850,8 +981,7 @@ export default function ShowsScreen() {
         </Animated.View>
       ) : tracked.length === 0 ? (
         <View style={styles.fullEmpty}>
-          <Ionicons name="calendar-outline" size={32} color={colors.textFaint} />
-          <Text style={styles.fullEmptyText}>{t.shows.emptyWatchList}</Text>
+          <EmptyState icon="calendar-outline" title={t.shows.emptyWatchList} />
         </View>
       ) : (
         <Animated.View style={{ flex: 1, opacity: contentFade }}>
@@ -890,6 +1020,12 @@ export default function ShowsScreen() {
           />
         </Animated.View>
       )}
+
+      <FeelingSheet
+        visible={!!feelingPromptItem}
+        onClose={() => setFeelingPromptItem(null)}
+        onSelect={handleQuickFeeling}
+      />
     </View>
   );
 }
@@ -930,18 +1066,6 @@ function createStyles(colors: Colors) {
     right: 0,
     alignItems: "center",
   },
-  groupPill: {
-    backgroundColor: colors.pillBg,
-    borderRadius: radius.pill,
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-  },
-  groupPillText: {
-    fontWeight: "800",
-    fontSize: 11,
-    color: colors.textMuted,
-    letterSpacing: 0.5,
-  },
   empty: {
     color: colors.textMuted,
     textAlign: "center",
@@ -972,6 +1096,5 @@ function createStyles(colors: Colors) {
   },
   emptyTodayText: { color: colors.textMuted, fontSize: 13 },
   fullEmpty: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: 40 },
-  fullEmptyText: { color: colors.textMuted, textAlign: "center" },
   });
 }

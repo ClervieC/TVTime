@@ -2,13 +2,15 @@ import { useCallback, useMemo, useState } from "react";
 import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors, radius, Colors } from "../../lib/theme";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { fetchProfile, Profile } from "../../lib/profiles";
 import { fetchFollowCounts, fetchIsFollowing, followUser, unfollowUser } from "../../lib/follows";
 import { fetchEpisodeCount, fetchFavorites, fetchUserShows, UserShow } from "../../lib/userShows";
 import { FollowButton } from "../../components/FollowButton";
 import { ShowCard } from "../../components/ShowCard";
+import { Avatar } from "../../components/Avatar";
+import { EmptyState } from "../../components/EmptyState";
 
 const AVG_EPISODE_MINUTES = 42;
 
@@ -100,9 +102,7 @@ export default function UserProfileScreen() {
       </View>
 
       <View style={styles.profileHeader}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarInitial}>{profile.username[0]?.toUpperCase()}</Text>
-        </View>
+        <Avatar name={profile.username} size="lg" />
         <Text style={styles.username}>{profile.username}</Text>
         <FollowButton following={isFollowing} loading={busy} onPress={toggleFollow} />
       </View>
@@ -157,7 +157,7 @@ export default function UserProfileScreen() {
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
           {favorites.length === 0 ? (
-            <Text style={styles.empty}>{t.profile.noFavorites}</Text>
+            <EmptyState icon="heart-outline" title={t.profile.noFavorites} />
           ) : (
             favorites.map((s) => <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />)
           )}
@@ -168,7 +168,7 @@ export default function UserProfileScreen() {
         </View>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
           {shows.length === 0 ? (
-            <Text style={styles.empty}>{t.profile.noShows}</Text>
+            <EmptyState icon="tv-outline" title={t.profile.noShows} />
           ) : (
             shows.map((s) => <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />)
           )}
@@ -199,16 +199,7 @@ function createStyles(colors: Colors) {
       paddingTop: 16,
     },
     profileHeader: { alignItems: "center", paddingVertical: 20, gap: 10 },
-    avatar: {
-      width: 84,
-      height: 84,
-      borderRadius: 42,
-      backgroundColor: colors.accent,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    avatarInitial: { fontSize: 34, fontWeight: "800", color: colors.onAccent },
-    username: { fontSize: 20, fontWeight: "800", color: colors.text },
+    username: { fontSize: type.title, fontWeight: "800", color: colors.text },
     followRow: {
       flexDirection: "row",
       marginHorizontal: 16,
@@ -219,12 +210,11 @@ function createStyles(colors: Colors) {
     },
     followStat: { flex: 1, alignItems: "center" },
     followStatBorder: { borderLeftWidth: 1, borderLeftColor: colors.border },
-    followNumber: { fontSize: 18, fontWeight: "800", color: colors.text },
-    followLabel: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
+    followNumber: { fontSize: type.title, fontWeight: "800", color: colors.text },
+    followLabel: { fontSize: type.caption, color: colors.textMuted, marginTop: 2 },
     sectionHeader: { paddingHorizontal: 16, paddingTop: 24, paddingBottom: 12 },
-    sectionTitle: { fontSize: 18, fontWeight: "800", color: colors.text },
+    sectionTitle: { fontSize: type.title, fontWeight: "800", color: colors.text },
     showsRow: { paddingHorizontal: 16, paddingBottom: 24 },
-    empty: { color: colors.textMuted },
     statHero: {
       marginHorizontal: 16,
       backgroundColor: colors.surface,
@@ -237,7 +227,7 @@ function createStyles(colors: Colors) {
     statHeroIcon: {
       width: 26,
       height: 26,
-      borderRadius: 13,
+      borderRadius: radius.pill,
       backgroundColor: colors.accentSoft,
       alignItems: "center",
       justifyContent: "center",
@@ -246,7 +236,7 @@ function createStyles(colors: Colors) {
     statHeroBig: { fontSize: 20, fontWeight: "800", color: colors.text },
     tvTimeRow: { flexDirection: "row", marginTop: 14, gap: 8 },
     tvTimeUnit: { alignItems: "center", flex: 1 },
-    tvTimeValue: { fontSize: 24, fontWeight: "800", color: colors.text },
+    tvTimeValue: { fontSize: type.display, fontWeight: "800", color: colors.text },
     tvTimeLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
     statHeroDivider: { height: 1, backgroundColor: colors.border, marginVertical: 16 },
   });

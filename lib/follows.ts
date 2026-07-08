@@ -1,8 +1,7 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 
 export async function followUser(followedId: string) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("follows").insert({ follower_id: userId, followed_id: followedId });
@@ -10,8 +9,7 @@ export async function followUser(followedId: string) {
 }
 
 export async function unfollowUser(followedId: string) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase
@@ -23,8 +21,7 @@ export async function unfollowUser(followedId: string) {
 }
 
 export async function fetchIsFollowing(followedId: string): Promise<boolean> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) return false;
 
   const { data, error } = await supabase

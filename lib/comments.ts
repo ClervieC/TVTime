@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 import { fetchProfiles, Profile } from "./profiles";
 
 export type CommentTarget = "show" | "episode";
@@ -23,8 +23,7 @@ async function enrichComments(comments: Comment[]): Promise<EnrichedComment[]> {
   if (comments.length === 0) return [];
   const userIds = [...new Set(comments.map((c) => c.user_id))];
   const commentIds = comments.map((c) => c.id);
-  const { data: userData } = await supabase.auth.getUser();
-  const myId = userData.user?.id;
+  const myId = await getCurrentUserId();
 
   const [authors, reactions] = await Promise.all([
     fetchProfiles(userIds),
@@ -71,8 +70,7 @@ export async function fetchEpisodeComments(episodeId: number): Promise<EnrichedC
 }
 
 export async function postShowComment(showId: number, body: string): Promise<void> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("comments").insert({
@@ -85,8 +83,7 @@ export async function postShowComment(showId: number, body: string): Promise<voi
 }
 
 export async function postEpisodeComment(showId: number, episodeId: number, body: string): Promise<void> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("comments").insert({
@@ -105,8 +102,7 @@ export async function deleteComment(commentId: string): Promise<void> {
 }
 
 export async function toggleCommentReaction(commentId: string, currentlyReacted: boolean): Promise<void> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   if (currentlyReacted) {

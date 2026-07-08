@@ -2,11 +2,12 @@ import { useCallback, useMemo, useState } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors, Colors } from "../../lib/theme";
+import { useColors, type, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { fetchFollowerIds, fetchFollowingIds } from "../../lib/follows";
 import { fetchProfiles, Profile } from "../../lib/profiles";
 import { UserRow } from "../../components/UserRow";
+import { EmptyState } from "../../components/EmptyState";
 
 export default function ConnectionsScreen() {
   const { id, type } = useLocalSearchParams<{ id: string; type: "followers" | "following" }>();
@@ -60,7 +61,7 @@ export default function ConnectionsScreen() {
             />
           )}
           ListEmptyComponent={
-            <Text style={styles.empty}>{isFollowers ? t.social.noFollowers : t.social.noFollowing}</Text>
+            <EmptyState icon="people-outline" title={isFollowers ? t.social.noFollowers : t.social.noFollowing} />
           }
         />
       )}
@@ -79,7 +80,6 @@ function createStyles(colors: Colors) {
       paddingTop: 16,
       paddingBottom: 12,
     },
-    title: { fontSize: 17, fontWeight: "800", color: colors.text },
-    empty: { color: colors.textMuted, textAlign: "center", marginTop: 24 },
+    title: { fontSize: type.title, fontWeight: "800", color: colors.text },
   });
 }

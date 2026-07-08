@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { View, Text, Pressable, Animated, StyleSheet } from "react-native";
 import { Image } from "expo-image";
 import { useRouter } from "expo-router";
-import { useColors, radius, Colors } from "../lib/theme";
+import { useColors, radius, type, Colors } from "../lib/theme";
 import { useScalePress, useMountIn } from "../lib/animations";
 
 interface ShowCardProps {
@@ -53,7 +53,7 @@ function createStyles(colors: Colors) {
     card: { width: 110, marginRight: 12 },
     image: { width: 110, height: 155, borderRadius: radius.sm, backgroundColor: colors.backgroundAlt },
     placeholder: { alignItems: "center", justifyContent: "center" },
-    placeholderText: { color: colors.textFaint, fontSize: 30, fontWeight: "700" },
+    placeholderText: { color: colors.textFaint, fontSize: type.display, fontWeight: "700" },
     name: { color: colors.text, fontSize: 13, fontWeight: "600", marginTop: 6 },
     subtitle: { color: colors.textMuted, fontSize: 11, marginTop: 2 },
   });

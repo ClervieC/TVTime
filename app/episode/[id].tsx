@@ -30,13 +30,13 @@ import {
   setEpisodeWatched,
   WatchedEpisode,
 } from "../../lib/userShows";
-import { useColors, radius, Colors } from "../../lib/theme";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
 import { useScalePress, useMountIn, useSwipeDownToDismiss } from "../../lib/animations";
 import { WatchedCheck } from "../../components/WatchedCheck";
 import { CommentsSection } from "../../components/CommentsSection";
 import { CharacterVote } from "../../components/CharacterVote";
-import { supabase } from "../../lib/supabase";
+import { getCurrentUserId } from "../../lib/supabase";
 import {
   deleteComment,
   fetchEpisodeComments,
@@ -50,14 +50,7 @@ import {
   voteForCharacter,
   CharacterVoteTally,
 } from "../../lib/characterVotes";
-
-const FEELING_EMOJIS = [
-  { key: "lol", emoji: "😂" },
-  { key: "shocked", emoji: "😱" },
-  { key: "heartbroken", emoji: "💔" },
-  { key: "mindblown", emoji: "🤯" },
-  { key: "bored", emoji: "😴" },
-] as const;
+import { FEELING_EMOJIS } from "../../lib/feelings";
 
 const MAX_DOTS = 5;
 const SIDEBAR_WIDTH = 340;
@@ -106,16 +99,23 @@ export default function EpisodeDetailScreen() {
       setLoading(true);
       setPositioned(false);
       hasScrolledToInitial.current = false;
+
+      // Episodes + watched status are the only two things this page actually
+      // needs to render and position itself correctly, and both are already
+      // warm from the Watch List's own background load for every "watching"
+      // show — so this resolves near-instantly in the common case of opening
+      // an episode from there. The show object (used only for the small pill
+      // above the title) and cast (used only by the vote section, well below
+      // the fold) are never prefetched anywhere, so gating the whole page on
+      // them turned every episode open into a fresh cold TVmaze round trip on
+      // top of data we already had. Let those two populate whenever they're
+      // ready instead of blocking first paint on them.
       Promise.all([
-        showIdNum ? getCachedShow(showIdNum, () => getShow(showIdNum)) : Promise.resolve(null),
         showIdNum ? getCachedEpisodes(showIdNum, () => getShowEpisodes(showIdNum)) : Promise.resolve([]),
         showIdNum ? getCachedWatchedEpisodes(showIdNum, () => fetchWatchedEpisodes(showIdNum)) : Promise.resolve([]),
-        showIdNum ? getShowCast(showIdNum).catch(() => []) : Promise.resolve([]),
-      ]).then(([sh, eps, watchedList, castData]) => {
+      ]).then(([eps, watchedList]) => {
         if (!active) return;
-        setShow(sh);
         setEpisodes(eps);
-        setCast(castData);
         const map: Record<number, WatchedEpisode | null> = {};
         for (const w of watchedList) map[w.tvmaze_episode_id] = w;
         setWatchedMap(map);
@@ -123,11 +123,31 @@ export default function EpisodeDetailScreen() {
         setCurrentIndex(idx >= 0 ? idx : 0);
         setLoading(false);
       });
+
+      if (showIdNum) {
+        getCachedShow(showIdNum, () => getShow(showIdNum)).then((sh) => active && setShow(sh));
+        getShowCast(showIdNum)
+          .then((c) => active && setCast(c))
+          .catch(() => {});
+      }
+
       return () => {
         active = false;
       };
     }, [initialEpisodeId, showIdNum])
   );
+
+  // Resizing a desktop browser window across the 700px breakpoint mid-episode
+  // flips isDesktopWeb and switches which branch renders below — including
+  // mounting a brand new FlatList when moving back to the mobile branch.
+  // Without this, hasScrolledToInitial/positioned would still be left over
+  // from before the switch, so the positioning effect below would skip
+  // re-running and the freshly mounted FlatList would just sit at its
+  // default offset (episode index 0) instead of the real current episode.
+  useEffect(() => {
+    hasScrolledToInitial.current = false;
+    setPositioned(false);
+  }, [isDesktopWeb]);
 
   // FlatList's initialScrollIndex prop is unreliable for this — especially on
   // web, it's been observed landing on the wrong page for larger indexes (e.g.
@@ -205,7 +225,7 @@ export default function EpisodeDetailScreen() {
   async function setRating(episode: TVMazeEpisode, value: number) {
     const current = watchedMap[episode.id];
     if (!current) return;
-    await rateEpisode(episode.id, value, current.feeling);
+    await rateEpisode(showIdNum, episode.id, value, current.feeling);
     setWatchedMap((prev) => ({ ...prev, [episode.id]: { ...current, rating: value } }));
   }
 
@@ -219,7 +239,7 @@ export default function EpisodeDetailScreen() {
     const current = watchedMap[episode.id];
     if (!current) return;
     const next = current.feeling === key ? null : key;
-    await rateEpisode(episode.id, current.rating, next);
+    await rateEpisode(showIdNum, episode.id, current.rating, next);
     setWatchedMap((prev) => ({ ...prev, [episode.id]: { ...current, feeling: next } }));
   }
 
@@ -545,7 +565,7 @@ function EpisodePage({
   useEffect(() => {
     if (!unlocked || !active) return;
     let isCurrent = true;
-    supabase.auth.getUser().then(({ data }) => isCurrent && setMyUserId(data.user?.id ?? null));
+    getCurrentUserId().then((id) => isCurrent && setMyUserId(id ?? null));
     setCommentsLoading(true);
     fetchEpisodeComments(episode.id)
       .then((data) => isCurrent && setComments(data))
@@ -590,24 +610,48 @@ function EpisodePage({
       characterId: member.character.id,
       characterName: member.character.name,
     };
+    const previousCharacterId = myCharacterId;
     setMyCharacterId(member.character.id);
-    await voteForCharacter(showId, episode.id, choice);
-    setVoteTally((await fetchCharacterVotes(episode.id)).tally);
+    try {
+      await voteForCharacter(showId, episode.id, choice);
+    } catch {
+      // Roll back the optimistic selection — the server never recorded it.
+      setMyCharacterId(previousCharacterId);
+      return;
+    }
+    // The vote is recorded either way now — a failure here only means the
+    // tally display is stale, not that the vote itself should be undone.
+    fetchCharacterVotes(episode.id)
+      .then((res) => setVoteTally(res.tally))
+      .catch(() => {});
   }
 
   async function handleRemoveVote() {
+    const previousCharacterId = myCharacterId;
     setMyCharacterId(null);
-    await removeCharacterVote(episode.id);
-    setVoteTally((await fetchCharacterVotes(episode.id)).tally);
+    try {
+      await removeCharacterVote(episode.id);
+    } catch {
+      setMyCharacterId(previousCharacterId);
+      return;
+    }
+    fetchCharacterVotes(episode.id)
+      .then((res) => setVoteTally(res.tally))
+      .catch(() => {});
   }
 
   return (
     <ScrollView style={{ width, height: "100%" }} contentContainerStyle={styles.page} showsVerticalScrollIndicator={false}>
       <GestureDetector gesture={swipeDownGesture}>
         <Reanimated.View style={[styles.hero, swipeDownStyle]}>
-          {episode.image ? (
+          {episode.image && active ? (
             <Image source={{ uri: episode.image.original }} style={styles.heroImage} />
           ) : (
+            // Every page mounts up front for scroll-positioning reasons (see
+            // initialNumToRender on the FlatList), but there's no reason to
+            // also request full-res images for pages the user isn't near —
+            // `active` (current +/-1) gates the actual image request the
+            // same way it already gates comments/votes/feelings fetching.
             <View style={[styles.heroImage, { backgroundColor: colors.backgroundAlt }]} />
           )}
           <LinearGradient
@@ -843,7 +887,7 @@ function createStyles(colors: Colors) {
   iconBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: radius.pill,
     backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
     justifyContent: "center",
@@ -855,7 +899,7 @@ function createStyles(colors: Colors) {
     marginTop: -22,
     width: 44,
     height: 44,
-    borderRadius: 22,
+    borderRadius: radius.pill,
     backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
     justifyContent: "center",
@@ -872,7 +916,7 @@ function createStyles(colors: Colors) {
     backgroundColor: colors.background,
     paddingTop: 20,
   },
-  sidebarTitle: { fontSize: 16, fontWeight: "800", color: colors.text, paddingHorizontal: 16, marginBottom: 8 },
+  sidebarTitle: { fontSize: type.subtitle, fontWeight: "800", color: colors.text, paddingHorizontal: 16, marginBottom: 8 },
   sidebarSeasonHeader: {
     fontSize: 11,
     fontWeight: "800",
@@ -920,7 +964,7 @@ function createStyles(colors: Colors) {
     padding: 20,
   },
   code: { color: "rgba(255,255,255,0.85)", fontWeight: "700", fontSize: 13, letterSpacing: 0.3 },
-  title: { fontSize: 24, fontWeight: "800", color: "#fff", marginTop: 4 },
+  title: { fontSize: type.display, fontWeight: "800", color: "#fff", marginTop: 4 },
   remainingBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -953,7 +997,7 @@ function createStyles(colors: Colors) {
   feelingChip: { alignItems: "center", gap: 4, padding: 8, borderRadius: radius.sm },
   feelingChipActive: { backgroundColor: colors.accentSoft },
   feelingEmoji: { fontSize: 26 },
-  feelingLabel: { fontSize: 9, fontWeight: "700", color: colors.textMuted },
+  feelingLabel: { fontSize: type.micro, fontWeight: "700", color: colors.textMuted },
   feelingTally: { alignItems: "center", gap: 4, padding: 8 },
   feelingTallyCount: { fontSize: 12, fontWeight: "700", color: colors.textMuted },
   unwatchedPrompt: {

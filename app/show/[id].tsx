@@ -9,7 +9,6 @@ import {
   Pressable,
   Image,
   TextInput,
-  useWindowDimensions,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
@@ -37,14 +36,15 @@ import {
   UserShow,
   WatchedEpisode,
 } from "../../lib/userShows";
-import { useColors, radius, Colors } from "../../lib/theme";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
 import { useGrowIn, useFadeIn, useScalePress, useMountIn, useSwipeDownToDismiss } from "../../lib/animations";
 import { WatchedCheck } from "../../components/WatchedCheck";
 import { CommentsSection } from "../../components/CommentsSection";
+import { Sheet } from "../../components/Sheet";
 import { usePreviousEpisodesPrompt } from "../../context/PreviousEpisodesPromptContext";
 import { useRewatchPrompt } from "../../context/RewatchPromptContext";
-import { supabase } from "../../lib/supabase";
+import { getCurrentUserId } from "../../lib/supabase";
 import {
   deleteComment,
   fetchShowComments,
@@ -81,11 +81,6 @@ export default function ShowDetailScreen() {
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useLanguage();
-  const { width: windowWidth } = useWindowDimensions();
-  // Below this, the sheet-from-the-bottom pattern still reads as "mobile
-  // native UI"; above it (tablet/desktop web), a centered dialog looks less
-  // like a phone menu stuck to the edge of a big window.
-  const isWideScreen = windowWidth >= 700;
   const underlineGrow = useGrowIn(tab);
   const contentFade = useFadeIn(!loading);
   const progressAnim = useRef(new Animated.Value(0)).current;
@@ -94,18 +89,22 @@ export default function ShowDetailScreen() {
   const { gesture: swipeDownGesture, animatedStyle: swipeDownStyle } = useSwipeDownToDismiss(() => router.back());
 
   const load = useCallback(async () => {
-    const [showData, episodeData, userShows, watchedData, castData] = await Promise.all([
+    const [showData, episodeData, userShows, watchedData] = await Promise.all([
       getCachedShow(showId, () => getShow(showId)),
       getCachedEpisodes(showId, () => getShowEpisodes(showId)),
       fetchUserShows(),
       getCachedWatchedEpisodes(showId, () => fetchWatchedEpisodes(showId)),
-      getShowCast(showId).catch(() => []),
     ]);
     setShow(showData);
     setEpisodes(episodeData);
     setUserShow(userShows.find((s) => s.tvmaze_id === showId) ?? null);
     setWatched(watchedData);
-    setCast(castData);
+    // Cast only ever shows on the Info tab (default tab is Episodes), and is
+    // never prefetched elsewhere — no reason to make the default view wait
+    // on it too.
+    getShowCast(showId)
+      .then(setCast)
+      .catch(() => {});
   }, [showId]);
 
   useFocusEffect(
@@ -120,7 +119,7 @@ export default function ShowDetailScreen() {
   );
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => setMyUserId(data.user?.id ?? null));
+    getCurrentUserId().then((id) => setMyUserId(id ?? null));
   }, []);
 
   // Comments are only ever visible on the Info tab, so there's no reason to
@@ -551,105 +550,85 @@ export default function ShowDetailScreen() {
         </View>
       </ScrollView>
 
-      {menuOpen && (
-        <Pressable
-          style={[styles.modalBackdrop, isWideScreen && styles.modalBackdropWide]}
-          onPress={() => setMenuOpen(false)}
-        >
-          <Pressable
-            style={[styles.menuSheet, isWideScreen && styles.menuSheetWide]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            {userShow ? (
-              <>
-                <Pressable style={styles.menuItem} onPress={handlePause}>
-                  <Ionicons
-                    name={userShow.status === "paused" ? "play-outline" : "pause-circle-outline"}
-                    size={20}
-                    color={colors.text}
-                  />
-                  <Text style={styles.menuItemText}>
-                    {userShow.status === "paused" ? t.showDetail.resumeFromPause : t.showDetail.pauseShow}
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={handleStop}>
-                  <Ionicons
-                    name={userShow.status === "dropped" ? "play-outline" : "stop-circle-outline"}
-                    size={20}
-                    color={colors.text}
-                  />
-                  <Text style={styles.menuItemText}>
-                    {userShow.status === "dropped" ? t.showDetail.resumeTracking : t.showDetail.stopShow}
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={handleToggleFavorite}>
-                  <Ionicons name={userShow.is_favorite ? "star" : "star-outline"} size={20} color={colors.text} />
-                  <Text style={styles.menuItemText}>
-                    {userShow.is_favorite ? t.showDetail.removeFavorite : t.showDetail.addFavorite}
-                  </Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={openListPicker}>
-                  <Ionicons name="list-outline" size={20} color={colors.text} />
-                  <Text style={styles.menuItemText}>{t.showDetail.addToAList}</Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={handleRemoveFromList}>
-                  <Ionicons name="trash-outline" size={20} color={colors.red} />
-                  <Text style={[styles.menuItemText, { color: colors.red }]}>{t.showDetail.removeFromList}</Text>
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <Pressable
-                  style={styles.menuItem}
-                  onPress={() => {
-                    toggleInList();
-                    setMenuOpen(false);
-                  }}
-                >
-                  <Ionicons name="add-circle-outline" size={20} color={colors.text} />
-                  <Text style={styles.menuItemText}>{t.showDetail.addToMyList}</Text>
-                </Pressable>
-                <Pressable style={styles.menuItem} onPress={openListPicker}>
-                  <Ionicons name="list-outline" size={20} color={colors.text} />
-                  <Text style={styles.menuItemText}>{t.showDetail.addToAList}</Text>
-                </Pressable>
-              </>
-            )}
-          </Pressable>
-        </Pressable>
-      )}
-
-      {listPickerOpen && (
-        <Pressable
-          style={[styles.modalBackdrop, isWideScreen && styles.modalBackdropWide]}
-          onPress={() => setListPickerOpen(false)}
-        >
-          <Pressable
-            style={[styles.menuSheet, isWideScreen && styles.menuSheetWide]}
-            onPress={(e) => e.stopPropagation()}
-          >
-            <Text style={styles.menuSheetTitle}>{t.showDetail.addToAList}</Text>
-            {lists.map((list) => (
-              <Pressable key={list.id} style={styles.menuItem} onPress={() => handleAddToList(list.id)}>
-                <Ionicons name="list-outline" size={20} color={colors.text} />
-                <Text style={styles.menuItemText}>{list.name}</Text>
-              </Pressable>
-            ))}
-            <View style={styles.newListRow}>
-              <TextInput
-                style={styles.newListInput}
-                placeholder={t.showDetail.newListPlaceholder}
-                placeholderTextColor={colors.textFaint}
-                value={newListName}
-                onChangeText={setNewListName}
+      <Sheet visible={menuOpen} onClose={() => setMenuOpen(false)}>
+        {userShow ? (
+          <>
+            <Pressable style={styles.menuItem} onPress={handlePause}>
+              <Ionicons
+                name={userShow.status === "paused" ? "play-outline" : "pause-circle-outline"}
+                size={20}
+                color={colors.text}
               />
-              <Pressable style={styles.newListBtn} onPress={handleCreateList}>
-                <Ionicons name="add" size={20} color={colors.onAccent} />
-              </Pressable>
-            </View>
+              <Text style={styles.menuItemText}>
+                {userShow.status === "paused" ? t.showDetail.resumeFromPause : t.showDetail.pauseShow}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.menuItem} onPress={handleStop}>
+              <Ionicons
+                name={userShow.status === "dropped" ? "play-outline" : "stop-circle-outline"}
+                size={20}
+                color={colors.text}
+              />
+              <Text style={styles.menuItemText}>
+                {userShow.status === "dropped" ? t.showDetail.resumeTracking : t.showDetail.stopShow}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.menuItem} onPress={handleToggleFavorite}>
+              <Ionicons name={userShow.is_favorite ? "star" : "star-outline"} size={20} color={colors.text} />
+              <Text style={styles.menuItemText}>
+                {userShow.is_favorite ? t.showDetail.removeFavorite : t.showDetail.addFavorite}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.menuItem} onPress={openListPicker}>
+              <Ionicons name="list-outline" size={20} color={colors.text} />
+              <Text style={styles.menuItemText}>{t.showDetail.addToAList}</Text>
+            </Pressable>
+            <Pressable style={styles.menuItem} onPress={handleRemoveFromList}>
+              <Ionicons name="trash-outline" size={20} color={colors.red} />
+              <Text style={[styles.menuItemText, { color: colors.red }]}>{t.showDetail.removeFromList}</Text>
+            </Pressable>
+          </>
+        ) : (
+          <>
+            <Pressable
+              style={styles.menuItem}
+              onPress={() => {
+                toggleInList();
+                setMenuOpen(false);
+              }}
+            >
+              <Ionicons name="add-circle-outline" size={20} color={colors.text} />
+              <Text style={styles.menuItemText}>{t.showDetail.addToMyList}</Text>
+            </Pressable>
+            <Pressable style={styles.menuItem} onPress={openListPicker}>
+              <Ionicons name="list-outline" size={20} color={colors.text} />
+              <Text style={styles.menuItemText}>{t.showDetail.addToAList}</Text>
+            </Pressable>
+          </>
+        )}
+      </Sheet>
+
+      <Sheet visible={listPickerOpen} onClose={() => setListPickerOpen(false)}>
+        <Text style={styles.menuSheetTitle}>{t.showDetail.addToAList}</Text>
+        {lists.map((list) => (
+          <Pressable key={list.id} style={styles.menuItem} onPress={() => handleAddToList(list.id)}>
+            <Ionicons name="list-outline" size={20} color={colors.text} />
+            <Text style={styles.menuItemText}>{list.name}</Text>
           </Pressable>
-        </Pressable>
-      )}
+        ))}
+        <View style={styles.newListRow}>
+          <TextInput
+            style={styles.newListInput}
+            placeholder={t.showDetail.newListPlaceholder}
+            placeholderTextColor={colors.textFaint}
+            value={newListName}
+            onChangeText={setNewListName}
+          />
+          <Pressable style={styles.newListBtn} onPress={handleCreateList}>
+            <Ionicons name="add" size={20} color={colors.onAccent} />
+          </Pressable>
+        </View>
+      </Sheet>
     </View>
   );
 }
@@ -787,7 +766,7 @@ function createStyles(colors: Colors) {
   iconBtn: {
     width: 36,
     height: 36,
-    borderRadius: 18,
+    borderRadius: radius.pill,
     backgroundColor: "rgba(0,0,0,0.35)",
     alignItems: "center",
     justifyContent: "center",
@@ -800,7 +779,7 @@ function createStyles(colors: Colors) {
     paddingTop: 20,
     paddingHorizontal: 16,
   },
-  heroTitle: { color: colors.text, fontSize: 26, fontWeight: "800" },
+  heroTitle: { color: colors.text, fontSize: type.display, fontWeight: "800" },
   heroMeta: { color: colors.textMuted, fontSize: 13, marginTop: 4 },
   progressRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 16 },
   progressTrack: { flex: 1, height: 6, borderRadius: 3, backgroundColor: colors.pillBg, overflow: "hidden" },
@@ -827,7 +806,7 @@ function createStyles(colors: Colors) {
   tabTextActive: { color: colors.accent },
   tabUnderline: { height: 2, backgroundColor: colors.accent, width: "50%", marginTop: 8 },
   section: { paddingVertical: 16 },
-  sectionHeader: { fontSize: 18, fontWeight: "800", color: colors.text, marginBottom: 12 },
+  sectionHeader: { fontSize: type.subtitle, fontWeight: "800", color: colors.text, marginBottom: 12 },
   divider: { height: 1, backgroundColor: colors.border, marginVertical: 20 },
   summary: { color: colors.text, fontSize: 14, lineHeight: 21, marginBottom: 12 },
   meta: { color: colors.textMuted, fontSize: 13, marginTop: 2 },
@@ -842,12 +821,12 @@ function createStyles(colors: Colors) {
   trackTitle: { fontSize: 12, color: colors.textMuted },
   seasonRow: { flexDirection: "row", alignItems: "center", paddingVertical: 14 },
   seasonLeft: { flexDirection: "row", alignItems: "center", gap: 6, flex: 1 },
-  seasonTitle: { fontWeight: "800", fontSize: 15, color: colors.text },
+  seasonTitle: { fontWeight: "800", fontSize: type.body, color: colors.text },
   seasonCount: { color: colors.textMuted, fontSize: 13, marginRight: 10 },
   seasonCheck: {
     width: 26,
     height: 26,
-    borderRadius: 13,
+    borderRadius: radius.pill,
     borderWidth: 1.5,
     borderColor: colors.border,
     alignItems: "center",
@@ -864,45 +843,9 @@ function createStyles(colors: Colors) {
     paddingLeft: 8,
   },
   episodeLineText: { flex: 1, color: colors.text, fontSize: 13, marginRight: 10 },
-  modalBackdrop: {
-    position: "absolute",
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    backgroundColor: "rgba(0,0,0,0.4)",
-    justifyContent: "flex-end",
-  },
-  // On a wide (tablet/desktop web) viewport, a sheet glued to the bottom edge
-  // reads as an unadapted mobile pattern — center it as a regular dialog
-  // instead, same backdrop otherwise.
-  modalBackdropWide: {
-    justifyContent: "center",
-    alignItems: "center",
-    padding: 24,
-  },
-  menuSheet: {
-    backgroundColor: colors.surface,
-    borderTopLeftRadius: radius.lg,
-    borderTopRightRadius: radius.lg,
-    padding: 16,
-    paddingBottom: 32,
-    gap: 4,
-  },
-  menuSheetWide: {
-    width: "100%",
-    maxWidth: 420,
-    borderRadius: radius.lg,
-    paddingBottom: 16,
-    shadowColor: "#000",
-    shadowOpacity: 0.25,
-    shadowRadius: 24,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 12,
-  },
-  menuSheetTitle: { fontSize: 16, fontWeight: "800", color: colors.text, marginBottom: 8 },
+  menuSheetTitle: { fontSize: type.subtitle, fontWeight: "800", color: colors.text, marginBottom: 8 },
   menuItem: { flexDirection: "row", alignItems: "center", gap: 12, paddingVertical: 14 },
-  menuItemText: { fontSize: 15, fontWeight: "600", color: colors.text },
+  menuItemText: { fontSize: type.body, fontWeight: "600", color: colors.text },
   newListRow: { flexDirection: "row", alignItems: "center", gap: 10, marginTop: 8 },
   newListInput: {
     flex: 1,

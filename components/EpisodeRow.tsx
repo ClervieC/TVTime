@@ -1,14 +1,15 @@
-import { useMemo, useRef } from "react";
+import { memo, useMemo, useRef } from "react";
 import { View, Text, Pressable, Image, Animated, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import Swipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 import type { SwipeableMethods } from "react-native-gesture-handler/lib/typescript/components/ReanimatedSwipeable/ReanimatedSwipeableProps";
 import Reanimated, { useAnimatedStyle, type SharedValue } from "react-native-reanimated";
-import { useColors, radius, Colors } from "../lib/theme";
+import { useColors, radius, type, Colors } from "../lib/theme";
 import { useLanguage } from "../lib/i18n";
 import { useScalePress, useFlashPulse } from "../lib/animations";
 import { WatchedCheck } from "./WatchedCheck";
+import { Pill } from "./Pill";
 
 interface EpisodeRowProps {
   showId: number;
@@ -18,6 +19,7 @@ interface EpisodeRowProps {
   season: number;
   number: number;
   extraEpisodes?: number;
+  totalEpisodes?: number;
   title: string;
   isPremiere?: boolean;
   isNew?: boolean;
@@ -34,7 +36,15 @@ interface EpisodeRowProps {
   onPress?: () => void;
 }
 
-export function EpisodeRow({
+// Wrapped in memo() since this app's biggest lists (Watch List, Upcoming)
+// render dozens of these at once, each with its own Swipeable/gesture
+// handler and image — skipping a re-render (and everything it triggers
+// underneath) when this row's own props haven't actually changed matters a
+// lot more here than for a typical list item. Relies on callers passing
+// stable primitive props and stable callback references (see
+// WatchListEpisodeRow in app/(tabs)/index.tsx) — an inline arrow function
+// recreated every render would defeat this regardless.
+export const EpisodeRow = memo(function EpisodeRow({
   showId,
   showName,
   showImage,
@@ -42,6 +52,7 @@ export function EpisodeRow({
   season,
   number,
   extraEpisodes,
+  totalEpisodes,
   title,
   isPremiere,
   isNew,
@@ -131,6 +142,9 @@ export function EpisodeRow({
           {!!extraEpisodes && (
             <Text style={styles.positionRemaining}>{t.episodeRow.remaining(extraEpisodes)}</Text>
           )}
+          {!!totalEpisodes && (
+            <Text style={styles.positionRemaining}>{t.episodeRow.totalEpisodes(totalEpisodes)}</Text>
+          )}
         </View>
         <Text style={[styles.episodeTitle, dimmed && styles.textDimmed]} numberOfLines={1}>
           {title}
@@ -138,19 +152,19 @@ export function EpisodeRow({
         {!dimmed && (
           <View style={styles.badgeRow}>
             {isPremiere && (
-              <View style={[styles.badge, { backgroundColor: colors.badgePremiere }]}>
-                <Text style={[styles.badgeText, { color: "#fff" }]}>{t.episodeRow.premiere}</Text>
-              </View>
+              <Pill size="sm" uppercase color={colors.badgePremiere} textColor="#fff">
+                {t.episodeRow.premiere}
+              </Pill>
             )}
             {isNew && (
-              <View style={[styles.badge, { backgroundColor: colors.badgeNew }]}>
-                <Text style={[styles.badgeText, { color: colors.onAccent }]}>{t.episodeRow.new}</Text>
-              </View>
+              <Pill size="sm" uppercase color={colors.badgeNew} textColor={colors.onAccent}>
+                {t.episodeRow.new}
+              </Pill>
             )}
             {hasAired && (
-              <View style={[styles.badge, { backgroundColor: colors.badgeAired }]}>
-                <Text style={[styles.badgeText, { color: "#fff" }]}>{t.episodeRow.aired}</Text>
-              </View>
+              <Pill size="sm" uppercase color={colors.badgeAired} textColor="#fff">
+                {t.episodeRow.aired}
+              </Pill>
             )}
           </View>
         )}
@@ -208,7 +222,7 @@ export function EpisodeRow({
       {row}
     </Swipeable>
   );
-}
+});
 
 function createStyles(colors: Colors) {
   return StyleSheet.create({
@@ -245,19 +259,17 @@ function createStyles(colors: Colors) {
     // The three things that actually matter at a glance: which show, where
     // you are in it, and how much is left — the episode's own title is
     // secondary and shown smaller below.
-    showNameMain: { color: colors.text, fontSize: 15, fontWeight: "800" },
+    showNameMain: { color: colors.text, fontSize: type.body, fontWeight: "800" },
     positionRow: { flexDirection: "row", alignItems: "baseline", gap: 8, marginTop: 1 },
     positionCode: { color: colors.accent, fontSize: 13, fontWeight: "800" },
     positionRemaining: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
     episodeTitle: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
     badgeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
-    badge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: radius.sm },
-    badgeText: { fontSize: 9, fontWeight: "800", letterSpacing: 0.3 },
     timeCol: { alignItems: "flex-end", justifyContent: "center", paddingRight: 12 },
     time: { fontWeight: "700", fontSize: 12, color: colors.text },
     network: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
-    daysAwayNumber: { fontWeight: "800", fontSize: 24, color: colors.text },
-    daysAwayLabel: { fontSize: 10, fontWeight: "700", color: colors.textMuted, marginTop: 1 },
+    daysAwayNumber: { fontWeight: "800", fontSize: type.display, color: colors.text },
+    daysAwayLabel: { fontSize: type.micro, fontWeight: "700", color: colors.textMuted, marginTop: 1 },
     checkCol: { justifyContent: "center", paddingRight: 12 },
     expandCorner: { position: "absolute", top: 10, right: 10 },
   });

@@ -2,9 +2,12 @@ import { useCallback, useMemo, useState } from "react";
 import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors, Colors } from "../lib/theme";
+import { useColors, type, Colors } from "../lib/theme";
 import { useLanguage } from "../lib/i18n";
-import { fetchNotifications, markAllNotificationsRead, EnrichedNotification } from "../lib/notifications";
+import { fetchNotifications, EnrichedNotification } from "../lib/notifications";
+import { useNotifications } from "../context/NotificationsContext";
+import { Avatar } from "../components/Avatar";
+import { EmptyState } from "../components/EmptyState";
 
 export default function NotificationsScreen() {
   const router = useRouter();
@@ -13,6 +16,7 @@ export default function NotificationsScreen() {
   const { t } = useLanguage();
   const [notifications, setNotifications] = useState<EnrichedNotification[]>([]);
   const [loading, setLoading] = useState(true);
+  const { markAllRead } = useNotifications();
 
   useFocusEffect(
     useCallback(() => {
@@ -21,12 +25,12 @@ export default function NotificationsScreen() {
         if (!active) return;
         setNotifications(data);
         setLoading(false);
-        markAllNotificationsRead();
+        markAllRead();
       });
       return () => {
         active = false;
       };
-    }, [])
+    }, [markAllRead])
   );
 
   return (
@@ -50,9 +54,7 @@ export default function NotificationsScreen() {
               style={styles.row}
               onPress={() => item.actor && router.push({ pathname: "/users/[id]", params: { id: item.actor!.user_id } })}
             >
-              <View style={styles.avatar}>
-                <Text style={styles.avatarInitial}>{item.actor?.username[0]?.toUpperCase() ?? "?"}</Text>
-              </View>
+              <Avatar name={item.actor?.username} size="sm" />
               <View style={{ flex: 1 }}>
                 <Text style={styles.text}>
                   <Text style={styles.bold}>{item.actor?.username ?? "?"}</Text> {t.social.startedFollowingYou}
@@ -62,7 +64,7 @@ export default function NotificationsScreen() {
               {!item.read && <View style={styles.unreadDot} />}
             </Pressable>
           )}
-          ListEmptyComponent={<Text style={styles.empty}>{t.social.noNotifications}</Text>}
+          ListEmptyComponent={<EmptyState icon="notifications-outline" title={t.social.noNotifications} />}
         />
       )}
     </View>
@@ -80,7 +82,7 @@ function createStyles(colors: Colors) {
       paddingTop: 16,
       paddingBottom: 12,
     },
-    title: { fontSize: 17, fontWeight: "800", color: colors.text },
+    title: { fontSize: type.title, fontWeight: "800", color: colors.text },
     row: {
       flexDirection: "row",
       alignItems: "center",
@@ -88,19 +90,9 @@ function createStyles(colors: Colors) {
       paddingVertical: 10,
       paddingHorizontal: 16,
     },
-    avatar: {
-      width: 40,
-      height: 40,
-      borderRadius: 20,
-      backgroundColor: colors.accent,
-      alignItems: "center",
-      justifyContent: "center",
-    },
-    avatarInitial: { fontSize: 16, fontWeight: "800", color: colors.onAccent },
-    text: { fontSize: 14, color: colors.text },
+    text: { fontSize: type.body, color: colors.text },
     bold: { fontWeight: "800" },
-    date: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
-    unreadDot: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.accent },
-    empty: { color: colors.textMuted, textAlign: "center", marginTop: 24 },
+    date: { fontSize: type.caption, color: colors.textMuted, marginTop: 2 },
+    unreadDot: { width: 8, height: 8, borderRadius: 999, backgroundColor: colors.accent },
   });
 }

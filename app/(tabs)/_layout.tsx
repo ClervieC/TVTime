@@ -1,10 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useMemo, useRef } from "react";
 import { Tabs, useFocusEffect } from "expo-router";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
-import { fetchUnreadNotificationCount } from "../../lib/notifications";
+import { useNotifications } from "../../context/NotificationsContext";
 
 interface TabBarProps {
   state: { routes: { key: string; name: string }[]; index: number };
@@ -74,17 +74,30 @@ function CustomTabBar({ state, navigation, unreadCount }: TabBarProps) {
   );
 }
 
+const MIN_REFETCH_INTERVAL_MS = 10_000;
+
 export default function TabsLayout() {
   const { t } = useLanguage();
-  const [unreadCount, setUnreadCount] = useState(0);
+  const { unreadCount, refresh } = useNotifications();
+  const lastFetchedAt = useRef(0);
 
-  // Refetches whenever the whole (tabs) group regains focus — covers app
-  // start, switching tabs, and coming back from the notifications screen
-  // (a stack push outside the tab navigator, so it doesn't remount this).
+  // (tabs) is one Stack.Screen among several siblings (episode/[id], show/[id],
+  // list/[id], users/*, connections/[id], notifications — see app/_layout.tsx),
+  // so this refires on return from ANY of those, not just notifications, and
+  // NOT on switching between this group's own tabs (index/movies/explore/profile
+  // — that's a child-navigator change, not a focus change on this screen).
+  // The min-interval guard avoids a Supabase round trip on every quick
+  // in-and-out navigation (e.g. opening and closing an episode modal). This
+  // only needs to catch NEW notifications that arrived elsewhere — clearing
+  // the badge after the user actually reads them is handled instantly by
+  // NotificationsContext's markAllRead(), not by this poll.
   useFocusEffect(
     useCallback(() => {
-      fetchUnreadNotificationCount().then(setUnreadCount);
-    }, [])
+      const now = Date.now();
+      if (now - lastFetchedAt.current < MIN_REFETCH_INTERVAL_MS) return;
+      lastFetchedAt.current = now;
+      refresh();
+    }, [refresh])
   );
 
   return (

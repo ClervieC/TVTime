@@ -6,6 +6,7 @@ import {
   setSpoilerMode as persistSpoilerMode,
   Language,
 } from "./userSettings";
+import { setSupabaseAlertLanguage } from "./supabase";
 
 export type { Language };
 
@@ -47,10 +48,21 @@ const en = {
     title: "Movies",
     empty: "No movies yet.",
     watchedOn: (date: string) => `Watched on ${date}`,
+    watchCount: (n: number) => (n === 1 ? "Watched once" : `Watched ${n} times`),
+    overview: "Overview",
+    tabList: "My list",
+    tabUpcoming: "Upcoming",
+    emptyUpcoming: "Your watchlist is empty — add movies from Explore or a movie's page.",
+    emptyWatchlist: "Add movies to your watchlist to see them here.",
+    releasesOn: (date: string) => `Releases ${date}`,
+    addToWatchlist: "Add to watchlist",
+    inWatchlist: "In watchlist",
+    markWatched: "Mark as watched",
+    removeFromList: "Remove from list",
   },
   explore: {
     title: "Discover",
-    searchPlaceholder: "Search for a show",
+    searchPlaceholder: "Search for a show or movie",
     noResults: (query: string) => `No results for "${query}".`,
     ended: "Ended",
     running: "Running",
@@ -60,6 +72,14 @@ const en = {
     categoryKdrama: "K-Drama",
     categorySciFi: "Sci-Fi",
     categoryNew: "New releases",
+    categoryPopularMovies: "Popular",
+    categoryTopRatedMovies: "Top rated",
+    categoryNowPlayingMovies: "In theaters",
+    categoryUpcomingMovies: "Coming soon",
+    resultsShows: "Shows",
+    resultsMovies: "Movies",
+    noMatchTitle: "Show not found",
+    noMatchDesc: "This show isn't available on TVmaze, which the app uses to track episodes.",
   },
   profile: {
     statistics: "Statistics",
@@ -70,11 +90,15 @@ const en = {
     settings: "Settings",
     followers: "Followers",
     following: "Following",
-    watchTime: "Watch time",
+    watchTime: "Show watch time",
     episodesWatched: "Episodes watched",
     months: "months",
     days: "days",
     hours: "hours",
+    movieWatchTime: "Movie watch time",
+    moviesWatched: "Movies watched",
+    movies: "Movies",
+    noMovies: "No movies yet.",
     noFavorites: "No favorites yet.",
     noShows: "No shows yet.",
     noDropped: "No stopped shows.",
@@ -137,6 +161,7 @@ const en = {
     placeholder: "Add a comment...",
     empty: "No comments yet. Be the first!",
     unknownUser: "Someone",
+    postError: "Couldn't post your comment. Try again.",
   },
   characterVote: {
     title: "Favorite character",
@@ -150,7 +175,7 @@ const en = {
     bored: "Boring",
   },
   rewatchPrompt: {
-    alreadyWatched: "You've already marked this episode as watched",
+    alreadyWatched: "You've already marked this as watched",
     whatToDo: "What do you want to do?",
     unwatch: "I haven't watched it",
     rewatch: "I watched it again",
@@ -168,6 +193,7 @@ const en = {
     days: "DAYS",
     markWatched: "Mark watched",
     remaining: (n: number) => `${n} left`,
+    totalEpisodes: (n: number) => `${n} episode${n > 1 ? "s" : ""}`,
   },
   listDetail: {
     title: "List",
@@ -235,10 +261,21 @@ const fr: typeof en = {
     title: "Films",
     empty: "Aucun film pour l'instant.",
     watchedOn: (date: string) => `Vu le ${date}`,
+    watchCount: (n: number) => (n === 1 ? "Vu une fois" : `Vu ${n} fois`),
+    overview: "Synopsis",
+    tabList: "Ma liste",
+    tabUpcoming: "À venir",
+    emptyUpcoming: "Ta liste est vide — ajoute des films depuis Explorer ou la page d'un film.",
+    emptyWatchlist: "Ajoute des films à ta liste pour les voir ici.",
+    releasesOn: (date: string) => `Sortie le ${date}`,
+    addToWatchlist: "Ajouter à ma liste",
+    inWatchlist: "Dans ma liste",
+    markWatched: "Marquer comme vu",
+    removeFromList: "Retirer de la liste",
   },
   explore: {
     title: "Découvrir",
-    searchPlaceholder: "Chercher une série",
+    searchPlaceholder: "Chercher une série ou un film",
     noResults: (query: string) => `Aucun résultat pour "${query}".`,
     ended: "Terminée",
     running: "En cours",
@@ -248,6 +285,14 @@ const fr: typeof en = {
     categoryKdrama: "K-Drama",
     categorySciFi: "Science-fiction",
     categoryNew: "Dernières sorties",
+    categoryPopularMovies: "Les plus populaires",
+    categoryTopRatedMovies: "Les mieux notés",
+    categoryNowPlayingMovies: "Au cinéma",
+    categoryUpcomingMovies: "Bientôt disponibles",
+    resultsShows: "Séries",
+    resultsMovies: "Films",
+    noMatchTitle: "Série introuvable",
+    noMatchDesc: "Cette série n'est pas disponible sur TVmaze, que l'app utilise pour suivre les épisodes.",
   },
   profile: {
     statistics: "Statistiques",
@@ -258,11 +303,15 @@ const fr: typeof en = {
     settings: "Réglages",
     followers: "Abonnés",
     following: "Abonnements",
-    watchTime: "Temps de visionnage",
+    watchTime: "Temps séries",
     episodesWatched: "Épisodes vus",
     months: "mois",
     days: "jours",
     hours: "heures",
+    movieWatchTime: "Temps films",
+    moviesWatched: "Films vus",
+    movies: "Films",
+    noMovies: "Aucun film pour l'instant.",
     noFavorites: "Aucun favori pour l'instant.",
     noShows: "Aucune série pour l'instant.",
     noDropped: "Aucune série arrêtée.",
@@ -325,6 +374,7 @@ const fr: typeof en = {
     placeholder: "Ajouter un commentaire...",
     empty: "Aucun commentaire pour l'instant. Sois le premier !",
     unknownUser: "Quelqu'un",
+    postError: "Impossible d'envoyer ton commentaire. Réessaie.",
   },
   characterVote: {
     title: "Personnage préféré",
@@ -338,7 +388,7 @@ const fr: typeof en = {
     bored: "Ennuyeux",
   },
   rewatchPrompt: {
-    alreadyWatched: "Tu as déjà marqué cet épisode comme vu",
+    alreadyWatched: "Tu as déjà marqué ça comme vu",
     whatToDo: "Qu'est-ce que tu veux faire ?",
     unwatch: "Je ne l'ai pas regardé",
     rewatch: "Je l'ai revu",
@@ -356,6 +406,7 @@ const fr: typeof en = {
     days: "JOURS",
     markWatched: "Marquer comme vu",
     remaining: (n: number) => `${n} restant${n > 1 ? "s" : ""}`,
+    totalEpisodes: (n: number) => `${n} épisode${n > 1 ? "s" : ""}`,
   },
   listDetail: {
     title: "Liste",
@@ -433,6 +484,10 @@ export function LanguageProvider({ children }: PropsWithChildren) {
     setSpoilerModeState(enabled);
     persistSpoilerMode(enabled).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    setSupabaseAlertLanguage(language);
+  }, [language]);
 
   const value = useMemo(
     () => ({ language, setLanguage, spoilerMode, setSpoilerMode, t: dictionaries[language] }),

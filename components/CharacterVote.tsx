@@ -1,10 +1,12 @@
 import { useMemo } from "react";
-import { View, Text, Image, Pressable, ScrollView, StyleSheet } from "react-native";
+import { View, Text, Pressable, ScrollView, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors, radius, Colors } from "../lib/theme";
+import { useColors, type, Colors } from "../lib/theme";
 import { useLanguage } from "../lib/i18n";
 import { CastMember } from "../lib/tvmaze";
 import { CharacterVoteTally } from "../lib/characterVotes";
+import { Avatar } from "./Avatar";
+import { Pill } from "./Pill";
 
 const MAX_CANDIDATES = 20;
 
@@ -39,14 +41,8 @@ export function CharacterVote({ cast, tally, myCharacterId, onVote, onRemoveVote
               style={styles.card}
               onPress={() => (selected ? onRemoveVote() : onVote(c))}
             >
-              <View style={[styles.avatarWrap, selected && styles.avatarWrapSelected]}>
-                {c.person.image ? (
-                  <Image source={{ uri: c.person.image.medium }} style={styles.avatar} />
-                ) : (
-                  <View style={[styles.avatar, styles.avatarPlaceholder]}>
-                    <Ionicons name="person" size={20} color={colors.textFaint} />
-                  </View>
-                )}
+              <View style={styles.avatarWrap}>
+                <Avatar imageUri={c.person.image?.medium} size="md" />
                 {selected && (
                   <View style={styles.selectedBadge}>
                     <Ionicons name="checkmark" size={11} color="#fff" />
@@ -56,9 +52,7 @@ export function CharacterVote({ cast, tally, myCharacterId, onVote, onRemoveVote
               <Text style={styles.name} numberOfLines={1}>
                 {c.character.name}
               </Text>
-              {count > 0 && (
-                <Text style={styles.voteCount}>{t.characterVote.voteCount(count)}</Text>
-              )}
+              {count > 0 && <Pill size="sm">{t.characterVote.voteCount(count)}</Pill>}
             </Pressable>
           );
         })}
@@ -69,26 +63,22 @@ export function CharacterVote({ cast, tally, myCharacterId, onVote, onRemoveVote
 
 function createStyles(colors: Colors) {
   return StyleSheet.create({
-    title: { fontSize: 18, fontWeight: "800", color: colors.text, marginBottom: 12 },
-    card: { width: 80, marginRight: 14, alignItems: "center" },
+    title: { fontSize: type.title, fontWeight: "800", color: colors.text, marginBottom: 12 },
+    card: { width: 80, marginRight: 14, alignItems: "center", gap: 4 },
     avatarWrap: { position: "relative" },
-    avatarWrapSelected: { opacity: 1 },
-    avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: colors.backgroundAlt },
-    avatarPlaceholder: { alignItems: "center", justifyContent: "center" },
     selectedBadge: {
       position: "absolute",
       bottom: -2,
       right: -2,
       width: 18,
       height: 18,
-      borderRadius: 9,
+      borderRadius: 999,
       backgroundColor: colors.green,
       alignItems: "center",
       justifyContent: "center",
       borderWidth: 2,
       borderColor: colors.background,
     },
-    name: { fontSize: 11, fontWeight: "700", color: colors.text, marginTop: 6, textAlign: "center" },
-    voteCount: { fontSize: 10, color: colors.textMuted, marginTop: 1 },
+    name: { fontSize: type.micro, fontWeight: "700", color: colors.text, textAlign: "center" },
   });
 }

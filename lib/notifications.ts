@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 import { fetchProfiles, Profile } from "./profiles";
 
 export interface AppNotification {
@@ -15,9 +15,13 @@ export interface EnrichedNotification extends AppNotification {
 }
 
 export async function fetchNotifications(): Promise<EnrichedNotification[]> {
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
   const { data, error } = await supabase
     .from("notifications")
     .select("*")
+    .eq("user_id", userId)
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw error;
@@ -30,17 +34,20 @@ export async function fetchNotifications(): Promise<EnrichedNotification[]> {
 }
 
 export async function fetchUnreadNotificationCount(): Promise<number> {
+  const userId = await getCurrentUserId();
+  if (!userId) return 0;
+
   const { count, error } = await supabase
     .from("notifications")
     .select("*", { count: "exact", head: true })
+    .eq("user_id", userId)
     .eq("read", false);
   if (error) throw error;
   return count ?? 0;
 }
 
 export async function markAllNotificationsRead() {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) return;
 
   const { error } = await supabase.from("notifications").update({ read: true }).eq("user_id", userId).eq("read", false);

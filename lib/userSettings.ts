@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 
 export type Language = "en" | "fr";
 
@@ -9,8 +9,7 @@ export interface UserSettings {
 }
 
 export async function fetchUserSettings(): Promise<UserSettings> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { data, error } = await supabase.from("user_settings").select("*").eq("user_id", userId).maybeSingle();
@@ -19,8 +18,7 @@ export async function fetchUserSettings(): Promise<UserSettings> {
 }
 
 export async function setSpoilerMode(enabled: boolean) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase
@@ -30,8 +28,7 @@ export async function setSpoilerMode(enabled: boolean) {
 }
 
 export async function setLanguage(language: Language) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase

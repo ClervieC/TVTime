@@ -2,12 +2,13 @@ import { useMemo, useState } from "react";
 import { View, Text, TextInput, FlatList, Pressable, StyleSheet } from "react-native";
 import { useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { useColors, radius, Colors } from "../../lib/theme";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { searchProfiles, Profile } from "../../lib/profiles";
 import { followUser, unfollowUser } from "../../lib/follows";
 import { UserRow } from "../../components/UserRow";
 import { FollowButton } from "../../components/FollowButton";
+import { EmptyState } from "../../components/EmptyState";
 
 export default function UserSearchScreen() {
   const router = useRouter();
@@ -97,7 +98,10 @@ export default function UserSearchScreen() {
           />
         )}
         ListEmptyComponent={
-          <Text style={styles.hint}>{query.trim() ? t.social.noUsersFound(query.trim()) : t.social.searchHint}</Text>
+          <EmptyState
+            icon="people-outline"
+            title={query.trim() ? t.social.noUsersFound(query.trim()) : t.social.searchHint}
+          />
         }
       />
     </View>
@@ -115,7 +119,7 @@ function createStyles(colors: Colors) {
       paddingTop: 16,
       paddingBottom: 12,
     },
-    title: { fontSize: 17, fontWeight: "800", color: colors.text },
+    title: { fontSize: type.title, fontWeight: "800", color: colors.text },
     searchBar: {
       flexDirection: "row",
       alignItems: "center",
@@ -127,7 +131,6 @@ function createStyles(colors: Colors) {
       backgroundColor: colors.backgroundAlt,
       borderRadius: radius.sm,
     },
-    searchInput: { flex: 1, fontSize: 16, color: colors.text },
-    hint: { color: colors.textMuted, textAlign: "center", marginTop: 24, paddingHorizontal: 32 },
+    searchInput: { flex: 1, fontSize: type.input, color: colors.text },
   });
 }

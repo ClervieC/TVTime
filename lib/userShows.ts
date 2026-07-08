@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 import { invalidateWatchedEpisodes } from "./showDataCache";
 
 export type ShowStatus = "watching" | "want_to_watch" | "watched" | "dropped" | "paused";
@@ -20,7 +20,7 @@ export interface UserShow {
 }
 
 export async function fetchUserShows(userId?: string) {
-  const targetUserId = userId ?? (await supabase.auth.getUser()).data.user?.id;
+  const targetUserId = userId ?? (await getCurrentUserId());
   if (!targetUserId) return [];
 
   const { data, error } = await supabase
@@ -38,8 +38,7 @@ export async function upsertUserShow(params: {
   show_image: string | null;
   status: ShowStatus;
 }) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { data, error } = await supabase
@@ -88,7 +87,7 @@ export async function setShowFavorite(tvmazeId: number, isFavorite: boolean) {
 }
 
 export async function fetchFavorites(userId?: string) {
-  const targetUserId = userId ?? (await supabase.auth.getUser()).data.user?.id;
+  const targetUserId = userId ?? (await getCurrentUserId());
   if (!targetUserId) return [];
 
   const { data, error } = await supabase
@@ -119,14 +118,20 @@ export interface ListItem {
 }
 
 export async function fetchLists() {
-  const { data, error } = await supabase.from("lists").select("*").order("created_at", { ascending: false });
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
+  const { data, error } = await supabase
+    .from("lists")
+    .select("*")
+    .eq("user_id", userId)
+    .order("created_at", { ascending: false });
   if (error) throw error;
   return data as ShowList[];
 }
 
 export async function createList(name: string) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { data, error } = await supabase.from("lists").insert({ user_id: userId, name }).select().single();
@@ -135,19 +140,27 @@ export async function createList(name: string) {
 }
 
 export async function fetchListItems(listId: string) {
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
   const { data, error } = await supabase
     .from("list_items")
     .select("*")
     .eq("list_id", listId)
+    .eq("user_id", userId)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data as ListItem[];
 }
 
 export async function fetchAllListItems() {
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
   const { data, error } = await supabase
     .from("list_items")
     .select("*")
+    .eq("user_id", userId)
     .order("created_at", { ascending: false });
   if (error) throw error;
   return data as ListItem[];
@@ -157,8 +170,7 @@ export async function addShowToList(
   listId: string,
   show: { tvmaze_id: number; show_name: string; show_image: string | null }
 ) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("list_items").upsert(
@@ -189,7 +201,7 @@ export interface WatchedEpisode {
 }
 
 export async function fetchEpisodeCount(userId?: string) {
-  const targetUserId = userId ?? (await supabase.auth.getUser()).data.user?.id;
+  const targetUserId = userId ?? (await getCurrentUserId());
   if (!targetUserId) return 0;
 
   const { count, error } = await supabase
@@ -200,24 +212,8 @@ export async function fetchEpisodeCount(userId?: string) {
   return count ?? 0;
 }
 
-export async function fetchWatchedEpisode(episodeId: number) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
-  if (!userId) return null;
-
-  const { data, error } = await supabase
-    .from("watched_episodes")
-    .select("*")
-    .eq("user_id", userId)
-    .eq("tvmaze_episode_id", episodeId)
-    .maybeSingle();
-  if (error) throw error;
-  return data as WatchedEpisode | null;
-}
-
 export async function fetchWatchedEpisodes(showId: number) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) return [];
 
   const { data, error } = await supabase
@@ -233,8 +229,7 @@ export async function fetchWatchedEpisodes(showId: number) {
 // load "Watched history" a page at a time instead of pulling every episode
 // the user has ever watched into memory up front.
 export async function fetchWatchedEpisodesPage(offset: number, limit: number) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) return [];
 
   const { data, error } = await supabase
@@ -254,8 +249,7 @@ export async function setEpisodeWatched(params: {
   number: number;
   watched: boolean;
 }) {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   if (!params.watched) {
@@ -294,8 +288,7 @@ export async function setEpisodesWatched(
   episodes: { id: number; season: number; number: number }[]
 ) {
   if (episodes.length === 0) return;
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("watched_episodes").upsert(
@@ -315,8 +308,7 @@ export async function setEpisodesWatched(
 
 export async function setEpisodesUnwatched(showId: number, episodeIds: number[]) {
   if (episodeIds.length === 0) return;
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase
@@ -337,8 +329,7 @@ export async function bulkIncrementRewatch(
   episodes: { episodeId: number; timesWatched: number }[]
 ) {
   if (episodes.length === 0) return;
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const watchedAt = new Date().toISOString();
@@ -361,8 +352,7 @@ export async function bulkUpsertWatchedEpisodes(
   records: { episodeId: number; season: number; number: number; watchedAt: string; timesWatched: number }[]
 ) {
   if (records.length === 0) return;
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const CHUNK_SIZE = 300;
@@ -386,12 +376,18 @@ export async function bulkUpsertWatchedEpisodes(
   invalidateWatchedEpisodes(showId);
 }
 
-export async function rateEpisode(tvmazeEpisodeId: number, rating: number | null, feeling: string | null) {
+export async function rateEpisode(
+  showId: number,
+  tvmazeEpisodeId: number,
+  rating: number | null,
+  feeling: string | null
+) {
   const { error } = await supabase
     .from("watched_episodes")
     .update({ rating, feeling })
     .eq("tvmaze_episode_id", tvmazeEpisodeId);
   if (error) throw error;
+  invalidateWatchedEpisodes(showId);
 }
 
 // Aggregate, anonymous count of how everyone who's watched this episode felt

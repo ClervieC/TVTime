@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Animated } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
@@ -85,6 +85,29 @@ export function useSwipeDownToDismiss(onDismiss: () => void) {
   }));
 
   return { gesture, animatedStyle };
+}
+
+// Drives Sheet's open/close transition. Unlike the other hooks here, the
+// component needs to stay mounted while animating OUT (a plain `if
+// (!visible) return null` pops instantly with no chance to animate), so this
+// tracks its own `mounted` flag: true immediately on open, but only flips
+// back to false once the close animation actually finishes.
+export function useSheetTransition(visible: boolean) {
+  const [mounted, setMounted] = useState(visible);
+  const progress = useRef(new Animated.Value(visible ? 1 : 0)).current;
+
+  useEffect(() => {
+    if (visible) {
+      setMounted(true);
+      Animated.spring(progress, { toValue: 1, useNativeDriver: true, speed: 16, bounciness: 4 }).start();
+    } else {
+      Animated.timing(progress, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
+        if (finished) setMounted(false);
+      });
+    }
+  }, [visible, progress]);
+
+  return { mounted, progress };
 }
 
 export function useGrowIn(trigger: unknown) {

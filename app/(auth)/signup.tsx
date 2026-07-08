@@ -3,7 +3,7 @@ import { View, Text, TextInput, Pressable, StyleSheet, ActivityIndicator } from 
 import { Image } from "expo-image";
 import { Link } from "expo-router";
 import { supabase } from "../../lib/supabase";
-import { useColors, radius, Colors } from "../../lib/theme";
+import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { createProfile } from "../../lib/profiles";
 
@@ -101,8 +101,8 @@ export default function SignupScreen() {
 function createStyles(colors: Colors) {
   return StyleSheet.create({
     container: { flex: 1, justifyContent: "center", padding: 24, backgroundColor: colors.background },
-    logo: { width: 96, height: 96, alignSelf: "center", marginBottom: 12 },
-    title: { fontSize: 28, fontWeight: "800", color: colors.text, textAlign: "center", marginBottom: 32 },
+    logo: { width: 96, height: 96, alignSelf: "center", marginBottom: 12, borderRadius: radius.lg },
+    title: { fontSize: type.display, fontWeight: "800", color: colors.text, textAlign: "center", marginBottom: 32 },
     input: {
       backgroundColor: colors.surface,
       color: colors.text,

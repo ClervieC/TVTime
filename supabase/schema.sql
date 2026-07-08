@@ -361,3 +361,137 @@ create policy "Character votes are viewable by authenticated users"
 
 create index if not exists character_votes_episode_idx
   on public.character_votes (tvmaze_episode_id);
+
+-- ============================================================
+-- Movie features: personal watchlist status, favorites, ratings/
+-- feelings, comments, and a stable TMDB id for matching.
+-- Run this block against an existing database — it's purely additive
+-- (new columns with defaults, new tables), so it's safe to run once.
+-- ============================================================
+
+-- tmdb_id is nullable: rows imported from a TV Time export never had one,
+-- only movies added going forward (from Explore or the detail screen) do.
+-- watched_at loses its NOT NULL/default because a 'want_to_watch' row has no
+-- watch date yet — it's only set when the movie is actually marked watched.
+alter table public.user_movies add column if not exists tmdb_id integer;
+alter table public.user_movies add column if not exists status text not null default 'watched' check (status in ('want_to_watch', 'watched'));
+alter table public.user_movies add column if not exists is_favorite boolean not null default false;
+alter table public.user_movies add column if not exists rating smallint check (rating between 1 and 5);
+alter table public.user_movies add column if not exists feeling text;
+alter table public.user_movies alter column watched_at drop not null;
+alter table public.user_movies alter column watched_at drop default;
+
+create index if not exists user_movies_status_idx on public.user_movies (user_id, status);
+
+-- Movie comments — same read-everyone/write-your-own shape as `comments`,
+-- kept as a separate table (rather than extending `comments`) since movies
+-- have no tvmaze id to key off of and altering that table's existing check
+-- constraints/enum in place is riskier than an additive new table.
+create table if not exists public.movie_comments (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  tmdb_id integer not null,
+  body text not null check (char_length(trim(body)) between 1 and 2000),
+  created_at timestamptz not null default now()
+);
+
+alter table public.movie_comments enable row level security;
+
+create policy "Users manage their own movie comments"
+  on public.movie_comments
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Movie comments are viewable by authenticated users"
+  on public.movie_comments
+  for select
+  using (auth.role() = 'authenticated');
+
+create index if not exists movie_comments_tmdb_idx
+  on public.movie_comments (tmdb_id, created_at);
+
+create table if not exists public.movie_comment_reactions (
+  comment_id uuid not null references public.movie_comments (id) on delete cascade,
+  user_id uuid not null references auth.users (id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (comment_id, user_id)
+);
+
+alter table public.movie_comment_reactions enable row level security;
+
+create policy "Users manage their own movie comment reactions"
+  on public.movie_comment_reactions
+  for all
+  using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+create policy "Movie comment reactions are viewable by authenticated users"
+  on public.movie_comment_reactions
+  for select
+  using (auth.role() = 'authenticated');
+
+-- ============================================================
+-- Performance indexes for query patterns that were previously relying on
+-- RLS's `user_id = auth.uid()` predicate alone (or a composite index whose
+-- leading column doesn't match the actual filter) and falling back to a
+-- full scan + sort. Purely additive — safe to run once against an existing
+-- database.
+-- ============================================================
+
+-- fetchNotifications (order by created_at) and fetchUnreadNotificationCount
+-- (filter on read = false) both run on every Profile tab visit and every
+-- tab-bar focus.
+create index if not exists notifications_user_created_idx
+  on public.notifications (user_id, created_at desc);
+create index if not exists notifications_unread_idx
+  on public.notifications (user_id)
+  where not read;
+
+-- fetchWatchedEpisodesPage (Watch List's lazy-loaded History section) sorts
+-- by watched_at, which watched_episodes_show_idx doesn't cover.
+create index if not exists watched_episodes_watched_at_idx
+  on public.watched_episodes (user_id, watched_at desc);
+
+-- rateEpisode/fetchEpisodeFeelingCounts/incrementRewatch filter solely on
+-- tvmaze_episode_id (no user_id/show_id predicate) — run on every episode
+-- detail view and every rewatch tap.
+create index if not exists watched_episodes_episode_idx
+  on public.watched_episodes (tvmaze_episode_id);
+
+-- fetchFollowerIds and the "followers" half of fetchFollowCounts filter on
+-- followed_id alone, which the (follower_id, followed_id) primary key can't
+-- serve efficiently since followed_id isn't its leading column.
+create index if not exists follows_followed_idx
+  on public.follows (followed_id);
+
+-- fetchEpisodeComments orders by created_at after filtering on
+-- tvmaze_episode_id — comments_episode_idx only covered the filter, not the
+-- sort. Superseded by the composite index below (safe to drop
+-- comments_episode_idx if you want, it's now redundant).
+create index if not exists comments_episode_created_idx
+  on public.comments (tvmaze_episode_id, created_at)
+  where tvmaze_episode_id is not null;
+
+-- Stores each movie's TMDB poster path at write time (add-to-watchlist or
+-- mark-watched), so the Movies grid can render a poster directly instead of
+-- every MovieCard independently re-searching TMDB by title+year on mount —
+-- a real per-card network/cache lookup across a grid of hundreds of movies.
+-- Rows written before this existed simply have poster_path null; MovieCard
+-- still falls back to the title+year search for those.
+alter table public.user_movies add column if not exists poster_path text;
+
+-- user_movies only had "Users manage their own movies" (for all, scoped to
+-- auth.uid() = user_id) — unlike watched_episodes, there was no broader
+-- read policy, so fetchMovieFeelingCounts (the "how others felt" aggregate
+-- on a movie's detail page) could only ever see the current user's own
+-- feeling, never anyone else's. This mirrors watched_episodes' equivalent
+-- policy: every app-level read of user_movies already filters explicitly by
+-- user_id in code (see lib/userMovies.ts) except the intentionally
+-- cross-user aggregate queries (which only ever select the anonymous
+-- `feeling` column, never user_id/rating/watch history), so broadening this
+-- to all authenticated users is safe.
+create policy "User movies are viewable by authenticated users"
+  on public.user_movies
+  for select
+  using (auth.role() = 'authenticated');

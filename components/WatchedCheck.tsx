@@ -20,9 +20,13 @@ export function WatchedCheck({ watched, timesWatched, onToggle, onRewatch, size 
   const styles = useMemo(() => createStyles(colors), [colors]);
 
   function bounce() {
+    // Slowed down from the original 80ms/tension:200 — that read as a single
+    // flicker, too fast to actually register as "this just got marked
+    // watched." Lower tension + higher friction stretches the settle out
+    // without looking sluggish.
     Animated.sequence([
-      Animated.timing(scale, { toValue: 0.7, duration: 80, useNativeDriver: true }),
-      Animated.spring(scale, { toValue: 1, friction: 3, tension: 200, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 0.7, duration: 150, useNativeDriver: true }),
+      Animated.spring(scale, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
     ]).start();
   }
 

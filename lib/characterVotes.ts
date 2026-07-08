@@ -1,4 +1,4 @@
-import { supabase } from "./supabase";
+import { supabase, getCurrentUserId } from "./supabase";
 
 export interface CharacterVoteTally {
   characterId: number;
@@ -29,8 +29,7 @@ export interface CharacterVoteChoice {
 export async function fetchCharacterVotes(
   episodeId: number
 ): Promise<{ tally: CharacterVoteTally[]; myCharacterId: number | null }> {
-  const { data: userData } = await supabase.auth.getUser();
-  const myId = userData.user?.id;
+  const myId = await getCurrentUserId();
 
   const { data, error } = await supabase
     .from("character_votes")
@@ -65,8 +64,7 @@ export async function voteForCharacter(
   episodeId: number,
   character: CharacterVoteChoice
 ): Promise<void> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) throw new Error("Not authenticated");
 
   const { error } = await supabase.from("character_votes").upsert(
@@ -86,8 +84,7 @@ export async function voteForCharacter(
 }
 
 export async function removeCharacterVote(episodeId: number): Promise<void> {
-  const { data: userData } = await supabase.auth.getUser();
-  const userId = userData.user?.id;
+  const userId = await getCurrentUserId();
   if (!userId) return;
 
   const { error } = await supabase
