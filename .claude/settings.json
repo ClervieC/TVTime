@@ -1,4 +1,20 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(sips -g pixelWidth -g pixelHeight assets/logo.png)",
+      "Bash(timeout 40 bash -c 'until curl -sf http://localhost:8081 >/dev/null 2>&1 || curl -sf http://localhost:19006 >/dev/null 2>&1; do sleep 2; done')",
+      "Bash(curl -sI http://localhost:8081)",
+      "Bash(curl -s http://localhost:8081)",
+      "Bash(node -e \"require.resolve\\('playwright'\\)\")",
+      "Bash(npx --no-install playwright --version)",
+      "Bash(NODE_PATH=\"/Users/clervie/.npm/_npx/e41f203b7505f1fb/node_modules\" node pw-check.js)",
+      "Bash(ls .env*)",
+      "Bash(grep -il \"test@\\\\|demo@\\\\|password\" README*)",
+      "Bash(NODE_PATH=\"/Users/clervie/.npm/_npx/e41f203b7505f1fb/node_modules\" node pw-legal.js)",
+      "Bash(NODE_PATH=\"/Users/clervie/.npm/_npx/e41f203b7505f1fb/node_modules\" node pw-splash.js)",
+      "Bash(jobs -l)"
+    ]
+  },
   "enabledPlugins": {
     "expo@claude-plugins-official": true
   }

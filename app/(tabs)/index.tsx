@@ -40,6 +40,7 @@ import { EmptyState } from "../../components/EmptyState";
 import { useColors, radius, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { useGrowIn, useFadeIn } from "../../lib/animations";
+import { useAuth } from "../../context/AuthContext";
 
 type ViewTab = "list" | "upcoming";
 
@@ -352,6 +353,7 @@ export default function ShowsScreen() {
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, language } = useLanguage();
+  const { setDataReady } = useAuth();
   const underlineGrow = useGrowIn(tab);
   const contentFade = useFadeIn(!loading);
 
@@ -435,7 +437,13 @@ export default function ShowsScreen() {
       flushScheduled = false;
       setTracked([...collected]);
       setLoading(false);
-      hasLoadedOnce.current = true;
+      // Only the very first flush needs to tell the root splash screen it
+      // can fade out (see AuthContext's dataReady) — later reloads (tab
+      // switches, pull-to-refresh) just update the list in place.
+      if (!hasLoadedOnce.current) {
+        hasLoadedOnce.current = true;
+        setDataReady(true);
+      }
     }
     function scheduleFlush() {
       if (flushScheduled) return;

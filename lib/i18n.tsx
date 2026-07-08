@@ -123,6 +123,10 @@ const en = {
     spoilerMode: "Spoiler mode",
     spoilerModeDesc: "See other people's comments even on episodes you haven't watched yet.",
     language: "Language",
+    legal: "Legal",
+    termsAndConditions: "Terms & Conditions",
+    privacyPolicy: "Privacy Policy",
+    contactUs: "Contact us",
     signOut: "Sign out",
   },
   showDetail: {
@@ -336,6 +340,10 @@ const fr: typeof en = {
     spoilerMode: "Mode spoilers",
     spoilerModeDesc: "Voir les commentaires des autres même sur les épisodes que tu n'as pas encore vus.",
     language: "Langue",
+    legal: "Mentions légales",
+    termsAndConditions: "Conditions d'utilisation",
+    privacyPolicy: "Politique de confidentialité",
+    contactUs: "Nous contacter",
     signOut: "Se déconnecter",
   },
   showDetail: {

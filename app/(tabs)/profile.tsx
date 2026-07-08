@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, Alert, ActivityIndicator, Platform, Switch } from "react-native";
+import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, Alert, ActivityIndicator, Platform, Switch, Linking } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import * as DocumentPicker from "expo-document-picker";
@@ -467,6 +467,23 @@ export default function ProfileScreen() {
         <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.language}</Text>
         <LanguageSwitch language={language} setLanguage={setLanguage} colors={colors} styles={styles} />
       </View>
+
+      <SectionHeader title={t.profile.legal} styles={styles} />
+      <Pressable style={styles.importRow} onPress={() => router.push("/legal/terms")}>
+        <Ionicons name="document-text-outline" size={20} color={colors.text} />
+        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.termsAndConditions}</Text>
+        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+      </Pressable>
+      <Pressable style={styles.importRow} onPress={() => router.push("/legal/privacy")}>
+        <Ionicons name="shield-checkmark-outline" size={20} color={colors.text} />
+        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.privacyPolicy}</Text>
+        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+      </Pressable>
+      <Pressable style={styles.importRow} onPress={() => Linking.openURL("mailto:clervie@bluedays.com")}>
+        <Ionicons name="mail-outline" size={20} color={colors.text} />
+        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.contactUs}</Text>
+        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+      </Pressable>
 
       <Pressable style={styles.signOut} onPress={() => supabase.auth.signOut()}>
         <Text style={styles.signOutText}>{t.profile.signOut}</Text>
