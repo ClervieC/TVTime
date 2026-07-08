@@ -114,6 +114,35 @@ function computeEnrichedForShow(t: TrackedShow, now: number): EnrichedShowResult
   };
 }
 
+// Field-by-field equality for the enrichedCacheRef reuse check below —
+// deliberately not a reference/deep-equal check, just the fields that
+// actually affect what a row renders, so a freshly recomputed result that
+// happens to describe the exact same thing as before can still reuse the
+// old object reference.
+function sameEnrichedResult(a: EnrichedShowResult, b: EnrichedShowResult): boolean {
+  if (a.kind !== b.kind) return false;
+  if (a.kind === "none") return true;
+  const bi = (b as typeof a).item;
+  return (
+    a.item.episode.id === bi.episode.id &&
+    a.item.watched === bi.watched &&
+    a.item.isNew === bi.isNew &&
+    a.item.extraEpisodes === bi.extraEpisodes &&
+    a.item.watchedAt === bi.watchedAt &&
+    a.item.totalEpisodes === bi.totalEpisodes
+  );
+}
+
+function sameUpcomingEpisode(a: EnrichedEpisode, b: EnrichedEpisode): boolean {
+  return (
+    a.show.tvmaze_id === b.show.tvmaze_id &&
+    a.show.show_name === b.show.show_name &&
+    a.show.show_image === b.show.show_image &&
+    a.watched === b.watched &&
+    a.timesWatched === b.timesWatched
+  );
+}
+
 type ShowsStyles = ReturnType<typeof createStyles>;
 
 interface WatchListEpisodeRowProps {
@@ -154,6 +183,65 @@ const WatchListEpisodeRow = memo(function WatchListEpisodeRow({
         dimmed={dimmed}
         onToggleWatched={() => onToggleWatched(item)}
         onRewatch={onRewatch ? () => onRewatch(item) : undefined}
+      />
+    </View>
+  );
+});
+
+interface UpcomingEpisodeRowProps {
+  item: EnrichedEpisode;
+  variant: "group" | "groupChild" | "episode";
+  expanded?: boolean;
+  extraCount?: number;
+  groupKey?: string;
+  onToggleWatched: (item: EnrichedEpisode) => void;
+  onRewatch?: (item: EnrichedEpisode) => void;
+  onToggleGroup?: (key: string) => void;
+  styles: ShowsStyles;
+}
+
+// Mirrors WatchListEpisodeRow's memo() treatment for the Upcoming tab —
+// same three "day/time/checkmark" slots as EpisodeRow always had, just
+// picking which ones apply per row shape (a collapsed group's first row, one
+// of its expanded children, or a plain single-episode row) instead of three
+// separate inline JSX blocks each rebuilding their own onPress closures.
+const UpcomingEpisodeRow = memo(function UpcomingEpisodeRow({
+  item,
+  variant,
+  expanded,
+  extraCount,
+  groupKey,
+  onToggleWatched,
+  onRewatch,
+  onToggleGroup,
+  styles,
+}: UpcomingEpisodeRowProps) {
+  const isFuture = new Date(item.episode.airstamp).getTime() > Date.now();
+  const daysOut = diffDaysFromToday(item.episode.airstamp);
+  const isFarFuture = isFuture && daysOut >= 7;
+
+  return (
+    <View style={[styles.upcomingRowWrap, variant === "groupChild" && styles.groupChildWrap]}>
+      <EpisodeRow
+        showId={item.show.tvmaze_id}
+        showName={item.show.show_name}
+        showImage={item.show.show_image}
+        episodeId={item.episode.id}
+        season={item.episode.season}
+        number={item.episode.number}
+        title={item.episode.name}
+        watched={item.watched}
+        isNew={variant === "episode" ? isFuture && !isFarFuture : undefined}
+        isPremiere={variant !== "groupChild" ? item.episode.number === 1 : undefined}
+        hasAired={!isFuture}
+        extraEpisodes={variant === "group" ? extraCount : undefined}
+        time={variant !== "group" && isFuture && !isFarFuture ? formatTime(item.episode.airstamp) : undefined}
+        daysAway={isFarFuture ? daysOut : undefined}
+        expandIcon={variant === "group" ? (expanded ? "up" : "down") : undefined}
+        timesWatched={item.timesWatched}
+        onToggleWatched={() => onToggleWatched(item)}
+        onRewatch={variant !== "group" && onRewatch ? () => onRewatch(item) : undefined}
+        onPress={variant === "group" && onToggleGroup && groupKey ? () => onToggleGroup(groupKey) : undefined}
       />
     </View>
   );
@@ -252,15 +340,15 @@ export default function ShowsScreen() {
   // loadingHistory state stays too, purely to drive the spinner.
   const loadingHistoryRef = useRef(false);
   // Per-show cache for the watchNext/haventStarted memo below, keyed by
-  // tvmaze_id. toggleWatched/rewatchEpisode already rebuild `tracked` with a
-  // new TrackedShow object only for the one show that actually changed
-  // (every other show keeps its exact previous reference) — reusing that,
-  // this cache lets an unaffected show's EnrichedEpisode object stay the
-  // exact same reference across a re-render instead of a brand new object
-  // being constructed for every tracked show every time any one of them
-  // changes. That object-identity stability is what lets WatchListEpisodeRow's
-  // memo() below actually skip re-rendering rows nothing happened to.
-  const enrichedCacheRef = useRef(new Map<number, { input: TrackedShow; result: EnrichedShowResult }>());
+  // tvmaze_id. computeEnrichedForShow is always called fresh (see the memo
+  // below) so this never serves stale, time-dependent data (a newly-aired
+  // episode or an expired isNew window always shows up) — the cached
+  // reference is only reused when the freshly computed result is actually
+  // equal to what's cached, which is what lets WatchListEpisodeRow's memo()
+  // skip re-rendering rows nothing really changed about.
+  const enrichedCacheRef = useRef(new Map<number, EnrichedShowResult>());
+  // Same idea, per episode, for the Upcoming tab's rows below.
+  const upcomingCacheRef = useRef(new Map<number, EnrichedEpisode>());
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, language } = useLanguage();
@@ -496,18 +584,18 @@ export default function ShowsScreen() {
     const started: EnrichedEpisode[] = [];
     const notStarted: EnrichedEpisode[] = [];
     const cache = enrichedCacheRef.current;
-    const nextCache = new Map<number, { input: TrackedShow; result: EnrichedShowResult }>();
+    const nextCache = new Map<number, EnrichedShowResult>();
 
     for (const t of tracked) {
       const showId = t.show.tvmaze_id;
-      const cached = cache.get(showId);
-      // Reusing the cached result (same EnrichedEpisode object reference) when
-      // this show's TrackedShow itself is unchanged is what lets unaffected
-      // rows keep stable identity across a re-render — toggleWatched/
-      // rewatchEpisode below only ever build a new TrackedShow for the one
-      // show that actually changed, every other show keeps its old reference.
-      const result = cached && cached.input === t ? cached.result : computeEnrichedForShow(t, now);
-      nextCache.set(showId, { input: t, result });
+      // Always computed fresh (so a newly-aired episode or an expired isNew
+      // window is never missed) — the previous result is only reused when
+      // it describes the exact same thing, which is what lets unaffected
+      // rows keep stable identity across a re-render (see sameEnrichedResult).
+      const fresh = computeEnrichedForShow(t, now);
+      const prev = cache.get(showId);
+      const result = prev && sameEnrichedResult(prev, fresh) ? prev : fresh;
+      nextCache.set(showId, result);
       if (result.kind === "started") started.push(result.item);
       else if (result.kind === "notStarted") notStarted.push(result.item);
     }
@@ -525,6 +613,8 @@ export default function ShowsScreen() {
 
   const upcoming = useMemo<EnrichedEpisode[]>(() => {
     const result: EnrichedEpisode[] = [];
+    const cache = upcomingCacheRef.current;
+    const nextCache = new Map<number, EnrichedEpisode>();
     for (const { show, episodes, watchedIds, watchedList } of tracked) {
       const timesByEpisode = new Map(watchedList.map((w) => [w.tvmaze_episode_id, w.times_watched]));
       for (const ep of episodes) {
@@ -532,14 +622,19 @@ export default function ShowsScreen() {
         // of rows) is unnecessary noise — only the current past window is
         // shown, widened lazily as the user scrolls up (see loadMorePastUpcoming).
         if (diffDaysFromToday(ep.airstamp) < -upcomingPastDays) continue;
-        result.push({
+        const fresh: EnrichedEpisode = {
           show,
           episode: ep,
           watched: watchedIds.has(ep.id),
           timesWatched: timesByEpisode.get(ep.id),
-        });
+        };
+        const prev = cache.get(ep.id);
+        const item = prev && sameUpcomingEpisode(prev, fresh) ? prev : fresh;
+        nextCache.set(ep.id, item);
+        result.push(item);
       }
     }
+    upcomingCacheRef.current = nextCache;
     result.sort(
       (a, b) =>
         new Date(a.episode.airstamp).getTime() -
@@ -630,14 +725,14 @@ export default function ShowsScreen() {
     );
   }, []);
 
-  function toggleGroup(key: string) {
+  const toggleGroup = useCallback((key: string) => {
     setExpandedGroups((prev) => {
       const next = new Set(prev);
       if (next.has(key)) next.delete(key);
       else next.add(key);
       return next;
     });
-  }
+  }, []);
 
   const { watchListData, watchListOffsets } = useMemo(() => {
     const rows: WatchListRow[] = [];
@@ -823,111 +918,62 @@ export default function ShowsScreen() {
       };
     }, [upcoming, language, expandedGroups]);
 
-  function renderUpcomingRow({ item: row }: { item: UpcomingRow }) {
-    if (row.type === "header") {
-      return (
-        <View style={styles.dateHeaderRow}>
-          <View style={styles.dateHeaderLine} />
-          <Text style={styles.dateHeaderText}>{row.label}</Text>
-          <View style={styles.dateHeaderLine} />
-        </View>
-      );
-    }
-    if (row.type === "empty") {
-      return (
-        <View style={styles.emptyTodayCard}>
-          <Ionicons name="cafe-outline" size={16} color={colors.textFaint} />
-          <Text style={styles.emptyTodayText}>{t.shows.emptyToday}</Text>
-        </View>
-      );
-    }
-    if (row.type === "group") {
-      const first = row.items[0];
-      const isFuture = new Date(first.episode.airstamp).getTime() > Date.now();
-      const daysOut = diffDaysFromToday(first.episode.airstamp);
-      const isFarFuture = isFuture && daysOut >= 7;
-      const groupKey = row.key;
-      const expanded = expandedGroups.has(groupKey);
-      return (
-        <View style={styles.upcomingRowWrap}>
-          <EpisodeRow
-            showId={first.show.tvmaze_id}
-            showName={first.show.show_name}
-            showImage={first.show.show_image}
-            episodeId={first.episode.id}
-            season={first.episode.season}
-            number={first.episode.number}
-            title={first.episode.name}
-            watched={first.watched}
-            isPremiere={first.episode.number === 1}
-            hasAired={!isFuture}
-            extraEpisodes={row.items.length - 1}
-            timesWatched={first.timesWatched}
-            daysAway={isFarFuture ? daysOut : undefined}
-            expandIcon={expanded ? "up" : "down"}
-            onToggleWatched={() => toggleWatched(first)}
-            onPress={() => toggleGroup(groupKey)}
+  const renderUpcomingRow = useCallback(
+    ({ item: row }: { item: UpcomingRow }) => {
+      if (row.type === "header") {
+        return (
+          <View style={styles.dateHeaderRow}>
+            <View style={styles.dateHeaderLine} />
+            <Text style={styles.dateHeaderText}>{row.label}</Text>
+            <View style={styles.dateHeaderLine} />
+          </View>
+        );
+      }
+      if (row.type === "empty") {
+        return (
+          <View style={styles.emptyTodayCard}>
+            <Ionicons name="cafe-outline" size={16} color={colors.textFaint} />
+            <Text style={styles.emptyTodayText}>{t.shows.emptyToday}</Text>
+          </View>
+        );
+      }
+      if (row.type === "group") {
+        return (
+          <UpcomingEpisodeRow
+            item={row.items[0]}
+            variant="group"
+            expanded={expandedGroups.has(row.key)}
+            extraCount={row.items.length - 1}
+            groupKey={row.key}
+            onToggleWatched={toggleWatched}
+            onToggleGroup={toggleGroup}
+            styles={styles}
           />
-        </View>
-      );
-    }
-    if (row.type === "groupChild") {
-      const item = row.item;
-      const isFuture = new Date(item.episode.airstamp).getTime() > Date.now();
-      const daysOut = diffDaysFromToday(item.episode.airstamp);
-      const isFarFuture = isFuture && daysOut >= 7;
-      return (
-        <View style={[styles.upcomingRowWrap, styles.groupChildWrap]}>
-          <EpisodeRow
-            showId={item.show.tvmaze_id}
-            showName={item.show.show_name}
-            showImage={item.show.show_image}
-            episodeId={item.episode.id}
-            season={item.episode.season}
-            number={item.episode.number}
-            title={item.episode.name}
-            watched={item.watched}
-            hasAired={!isFuture}
-            time={isFuture && !isFarFuture ? formatTime(item.episode.airstamp) : undefined}
-            daysAway={isFarFuture ? daysOut : undefined}
-            timesWatched={item.timesWatched}
-            onToggleWatched={() => toggleWatched(item)}
-            onRewatch={() => rewatchEpisode(item)}
+        );
+      }
+      if (row.type === "groupChild") {
+        return (
+          <UpcomingEpisodeRow
+            item={row.item}
+            variant="groupChild"
+            onToggleWatched={toggleWatched}
+            onRewatch={rewatchEpisode}
+            styles={styles}
           />
-        </View>
-      );
-    }
-    const item = row.item;
-    const isFuture = new Date(item.episode.airstamp).getTime() > Date.now();
-    const daysOut = diffDaysFromToday(item.episode.airstamp);
-    const isFarFuture = isFuture && daysOut >= 7;
-    return (
-      <View style={styles.upcomingRowWrap}>
-        <EpisodeRow
-          showId={item.show.tvmaze_id}
-          showName={item.show.show_name}
-          showImage={item.show.show_image}
-          episodeId={item.episode.id}
-          season={item.episode.season}
-          number={item.episode.number}
-          title={item.episode.name}
-          watched={item.watched}
-          isNew={isFuture && !isFarFuture}
-          isPremiere={item.episode.number === 1}
-          hasAired={!isFuture}
-          time={
-            isFuture && !isFarFuture
-              ? formatTime(item.episode.airstamp)
-              : undefined
-          }
-          daysAway={isFarFuture ? daysOut : undefined}
-          timesWatched={item.timesWatched}
-          onToggleWatched={() => toggleWatched(item)}
-          onRewatch={() => rewatchEpisode(item)}
+        );
+      }
+      return (
+        <UpcomingEpisodeRow
+          item={row.item}
+          variant="episode"
+          onToggleWatched={toggleWatched}
+          onRewatch={rewatchEpisode}
+          styles={styles}
         />
-      </View>
-    );
-  }
+      );
+    },
+    [expandedGroups, toggleWatched, toggleGroup, rewatchEpisode, styles, colors, t]
+  );
 
   return (
     <View style={styles.container}>

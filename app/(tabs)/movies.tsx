@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, Image, Pressable, Animated, FlatList, StyleSheet, ActivityIndicator, useWindowDimensions } from "react-native";
 import { useRouter, useFocusEffect } from "expo-router";
 import { fetchUserMovies, fetchMovieWatchlist, setMovieWatched, UserMovie } from "../../lib/userMovies";
@@ -28,6 +28,13 @@ type Block =
 type MoviesTab = "list" | "upcoming";
 type UpcomingEntry = { movie: UserMovie; tmdb: TMDBMovieDetails | null };
 
+// Mirrors app/(tabs)/profile.tsx's own reload throttle — this screen's
+// useFocusEffect fires on every return to the Movies tab, and reload() was
+// unconditionally refetching both collections every time, which in turn
+// re-triggered the Upcoming tab's TMDB-lookup effect below even while
+// sitting on the "list" sub-tab.
+const MIN_RELOAD_INTERVAL_MS = 10_000;
+
 export default function MoviesScreen() {
   const router = useRouter();
   const [tab, setTab] = useState<MoviesTab>("list");
@@ -42,7 +49,9 @@ export default function MoviesScreen() {
   const columns = Math.max(3, Math.floor((width - SCREEN_PADDING * 2 + GAP) / (TARGET_COLUMN_WIDTH + GAP)));
   const underlineGrow = useGrowIn(tab);
 
+  const lastLoadedAt = useRef(0);
   const reload = useCallback(() => {
+    lastLoadedAt.current = Date.now();
     Promise.all([fetchUserMovies(), fetchMovieWatchlist()])
       .then(([w, wl]) => {
         setMovies(w);
@@ -51,7 +60,12 @@ export default function MoviesScreen() {
       .finally(() => setLoaded(true));
   }, []);
 
-  useFocusEffect(reload);
+  useFocusEffect(
+    useCallback(() => {
+      if (Date.now() - lastLoadedAt.current < MIN_RELOAD_INTERVAL_MS) return;
+      reload();
+    }, [reload])
+  );
 
   // Stable references (empty deps, functional setState) so MovieCard's
   // memo() can actually skip re-rendering every other card in the grid when
@@ -76,8 +90,14 @@ export default function MoviesScreen() {
   // missing release date (no TMDB match) sorts to the very top rather than
   // being guessed at. Cross-references TMDB for release dates — resets to
   // null (not []) on every watchlist change so the tab shows a spinner
-  // instead of a flash of "empty" while this resolves.
+  // instead of a flash of "empty" while this resolves. Gated on the
+  // "upcoming" sub-tab being active: without this, every watchlist change
+  // (i.e. every reload() on focus) redid this TMDB lookup pass and flashed
+  // a spinner even while the user was sitting on "list" and never opened
+  // "upcoming" at all — this defers the work until the tab is actually
+  // opened, at which point it fetches with whatever watchlist is current.
   useEffect(() => {
+    if (tab !== "upcoming") return;
     let active = true;
     setUpcoming(null);
     mapWithConcurrency(watchlist, 4, (m) =>
@@ -98,7 +118,7 @@ export default function MoviesScreen() {
     return () => {
       active = false;
     };
-  }, [watchlist]);
+  }, [watchlist, tab]);
 
   async function handleMarkWatched(movie: UserMovie) {
     await setMovieWatched(movie.title, movie.year, true, movie.tmdb_id ?? undefined);

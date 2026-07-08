@@ -52,15 +52,32 @@ export default function TmdbMovieDetailScreen() {
       setTmdbNotFound(false);
       setCast([]);
       setUserRowLoaded(false);
-      getMovieDetails(tmdbId)
-        .then((d) => active && setTmdb(d))
-        .catch(() => active && setTmdbNotFound(true));
+
+      // Sequenced (not parallel) with the userRow lookup: fetchUserMovieByTmdbId
+      // needs this movie's title/year as a fallback for rows that predate
+      // tmdb_id being stored, so it has to wait on tmdb details first.
+      async function load() {
+        let details: TMDBMovieDetails | null = null;
+        try {
+          details = await getMovieDetails(tmdbId);
+          if (active) setTmdb(details);
+        } catch {
+          if (active) setTmdbNotFound(true);
+        }
+        if (!active) return;
+        const year = details?.release_date ? new Date(details.release_date).getFullYear() : null;
+        try {
+          const row = await fetchUserMovieByTmdbId(tmdbId, details?.title, year);
+          if (active) setUserRow(row);
+        } finally {
+          if (active) setUserRowLoaded(true);
+        }
+      }
+      load();
+
       getMovieCast(tmdbId)
         .then((c) => active && setCast(c))
         .catch(() => {});
-      fetchUserMovieByTmdbId(tmdbId)
-        .then((row) => active && setUserRow(row))
-        .finally(() => active && setUserRowLoaded(true));
       return () => {
         active = false;
       };

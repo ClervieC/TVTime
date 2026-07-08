@@ -481,17 +481,29 @@ create index if not exists comments_episode_created_idx
 -- still falls back to the title+year search for those.
 alter table public.user_movies add column if not exists poster_path text;
 
--- user_movies only had "Users manage their own movies" (for all, scoped to
--- auth.uid() = user_id) — unlike watched_episodes, there was no broader
--- read policy, so fetchMovieFeelingCounts (the "how others felt" aggregate
--- on a movie's detail page) could only ever see the current user's own
--- feeling, never anyone else's. This mirrors watched_episodes' equivalent
--- policy: every app-level read of user_movies already filters explicitly by
--- user_id in code (see lib/userMovies.ts) except the intentionally
--- cross-user aggregate queries (which only ever select the anonymous
--- `feeling` column, never user_id/rating/watch history), so broadening this
--- to all authenticated users is safe.
-create policy "User movies are viewable by authenticated users"
-  on public.user_movies
-  for select
-  using (auth.role() = 'authenticated');
+-- Superseded below — a plain "viewable by authenticated users" policy on
+-- user_movies would let any authenticated client SELECT * on any user's row
+-- directly (RLS gates rows, not which columns a query happens to ask for),
+-- exposing rating/watched_at/times_watched/is_favorite, not just the
+-- anonymous feeling this was added for. Run this drop if that policy was
+-- already applied from a previous version of this file:
+drop policy if exists "User movies are viewable by authenticated users" on public.user_movies;
+
+-- Narrow replacement: a SECURITY DEFINER function that returns only the
+-- aggregate feeling counts for a given movie, so user_movies itself stays
+-- locked to "auth.uid() = user_id" for every column while still letting
+-- fetchMovieFeelingCounts (lib/userMovies.ts) see everyone's feeling, not
+-- just the current user's.
+create or replace function public.movie_feeling_counts(p_tmdb_id integer)
+returns table (feeling text, count bigint)
+language sql
+security definer
+set search_path = public
+as $$
+  select feeling, count(*)
+  from public.user_movies
+  where tmdb_id = p_tmdb_id and feeling is not null
+  group by feeling;
+$$;
+
+grant execute on function public.movie_feeling_counts(integer) to authenticated;

@@ -67,7 +67,7 @@ export default function ProfileScreen() {
   const [usernameError, setUsernameError] = useState<string | null>(null);
   const [savingUsername, setSavingUsername] = useState(false);
   const [followCounts, setFollowCounts] = useState({ followers: 0, following: 0 });
-  const { unreadCount } = useNotifications();
+  const { unreadCount, refresh: refreshNotifications } = useNotifications();
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, language, setLanguage, spoilerMode, setSpoilerMode } = useLanguage();
@@ -120,9 +120,15 @@ export default function ProfileScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      // Unconditional (unlike load() below) — app/(tabs)/_layout.tsx's own
+      // refresh is Stack-level and deliberately doesn't fire on a same-group
+      // tab switch into Profile, so this is what catches a notification that
+      // arrived while the user was on another tab. Cheap enough (one count
+      // query) not to need its own throttle.
+      refreshNotifications();
       if (Date.now() - lastLoadedAt.current < MIN_RELOAD_INTERVAL_MS) return;
       load();
-    }, [load])
+    }, [load, refreshNotifications])
   );
 
   async function handleCreateList() {

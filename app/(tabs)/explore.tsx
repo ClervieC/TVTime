@@ -108,24 +108,33 @@ export default function ExploreScreen() {
   // accurate immediately rather than only after the user has tapped that
   // specific card once (see resolvedTvShows above). Low priority means an
   // actual interactive tap (open/add/favorite, or a search) still jumps
-  // ahead of this batch in the shared TVmaze queue; failures (no TVmaze
-  // match for this TMDB show) are silently skipped rather than alerted,
-  // since alerting for every unmatched card in a background pass would be
-  // absurd — the alert only makes sense as feedback for a direct tap.
+  // ahead of this batch in the shared TVmaze queue; a genuine "no match"
+  // (findTvmazeShowFromTmdbTv resolves to null — no tvdb_id on file, or
+  // TVmaze's lookup 404s) is marked attempted and not retried, since retrying
+  // that would never succeed. A *transient* failure (network blip, TVmaze
+  // 5xx — the promise actually rejects) is deliberately NOT marked attempted,
+  // so the next time this effect runs (e.g. the next language switch) it
+  // gets another try instead of that card's icons staying blank forever.
   useEffect(() => {
     const allShows = showCategories.flatMap((c) => c.data);
     const toResolve = allShows.filter((s) => !attemptedResolveIds.current.has(s.id));
     if (toResolve.length === 0) return;
-    toResolve.forEach((s) => attemptedResolveIds.current.add(s.id));
 
     let cancelled = false;
     mapWithConcurrency(
       toResolve,
       4,
-      (show) => findTvmazeShowFromTmdbTv(show.id, "low").catch(() => null),
+      async (show) => {
+        try {
+          return await findTvmazeShowFromTmdbTv(show.id, "low");
+        } catch {
+          return undefined;
+        }
+      },
       (result, show) => {
-        if (cancelled || !result) return;
-        setResolvedTvShows((prev) => (prev.has(show.id) ? prev : new Map(prev).set(show.id, result)));
+        if (cancelled || result === undefined) return;
+        attemptedResolveIds.current.add(show.id);
+        if (result) setResolvedTvShows((prev) => (prev.has(show.id) ? prev : new Map(prev).set(show.id, result)));
       },
     );
     return () => {
@@ -249,14 +258,16 @@ export default function ExploreScreen() {
   }
 
   // Mirrors quickAdd's toggle-off behavior for shows: tapping the check again
-  // removes the row entirely (regardless of watched/want_to_watch status),
-  // rather than only ever upserting — a card with no way to un-add left the
-  // only way to remove a movie the confusing "unwatch" rewatch-prompt path on
-  // the movie's own detail screen, which deletes a *watched* movie's history
-  // rather than just taking it off the watchlist.
+  // removes the row — but only when it's a want_to_watch entry. A *watched*
+  // movie also shows up in movieTmdbMap (it has a row too), so without this
+  // status check tapping the check on an already-watched movie would call
+  // removeUserMovie and permanently delete its rating/feeling/watched_at,
+  // not just take it off a watchlist it was never really "on". Managing a
+  // watched movie (rewatch/unwatch) stays on the movie's own detail screen,
+  // which has the real WatchedCheck + rewatch-prompt flow for that.
   async function quickAddMovie(movie: TMDBSearchResult) {
     const existing = movieTmdbMap.get(movie.id);
-    if (existing) {
+    if (existing?.status === "want_to_watch") {
       await removeUserMovie(existing.id);
       setMovieTmdbMap((prev) => {
         const next = new Map(prev);
@@ -265,6 +276,7 @@ export default function ExploreScreen() {
       });
       return;
     }
+    if (existing?.status === "watched") return;
     const year = movie.release_date ? Number(movie.release_date.slice(0, 4)) : null;
     const row = await addMovieToWatchlist(movie.id, movie.title, year, movie.poster_path);
     setMovieTmdbMap((prev) => new Map(prev).set(movie.id, row));

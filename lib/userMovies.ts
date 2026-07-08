@@ -106,7 +106,18 @@ export async function fetchUserMovie(id: string): Promise<UserMovie | null> {
 // caller having to fetch the whole list first. tmdb_id isn't unique across
 // users (each user who's added a given movie has their own row), so this
 // must filter by user_id explicitly rather than tmdb_id alone.
-export async function fetchUserMovieByTmdbId(tmdbId: number): Promise<UserMovie | null> {
+// fallbackTitle/fallbackYear cover rows written before tmdb_id existed on
+// this table (a TV Time import never sets it — see bulkUpsertUserMovies) or
+// before this specific row was ever matched to a TMDB id: without this,
+// looking up by tmdb_id alone would miss an existing watched row entirely,
+// and the caller (thinking there's nothing here yet) would upsert a new
+// 'want_to_watch' row on the same (user_id, title, year) conflict key,
+// silently resetting the existing watched row's status/watched_at/times_watched.
+export async function fetchUserMovieByTmdbId(
+  tmdbId: number,
+  fallbackTitle?: string,
+  fallbackYear?: number | null
+): Promise<UserMovie | null> {
   const userId = await getCurrentUserId();
   if (!userId) return null;
 
@@ -117,7 +128,14 @@ export async function fetchUserMovieByTmdbId(tmdbId: number): Promise<UserMovie 
     .eq("user_id", userId)
     .maybeSingle();
   if (error) throw error;
-  return data;
+  if (data) return data;
+  if (fallbackTitle === undefined) return null;
+
+  let byTitleQuery = supabase.from("user_movies").select("*").eq("user_id", userId).eq("title", fallbackTitle);
+  byTitleQuery = fallbackYear == null ? byTitleQuery.is("year", null) : byTitleQuery.eq("year", fallbackYear);
+  const { data: byTitle, error: titleError } = await byTitleQuery.maybeSingle();
+  if (titleError) throw titleError;
+  return byTitle;
 }
 
 // Adds a movie to the personal "want to watch" list — from Explore's movie
@@ -190,18 +208,18 @@ export async function rateMovie(id: string, rating: number | null, feeling: stri
 // Aggregate, anonymous count of how everyone who's watched this movie felt
 // about it — mirrors fetchEpisodeFeelingCounts, keyed by tmdb_id since that's
 // the only id shared across different users' rows for the same movie.
+// Goes through the movie_feeling_counts() SECURITY DEFINER function (see
+// supabase/schema.sql) rather than a raw select — user_movies' own RLS
+// stays locked to "auth.uid() = user_id" for every column, so this is the
+// only way to see the aggregate across other users' rows without opening
+// the whole table up.
 export async function fetchMovieFeelingCounts(tmdbId: number): Promise<Record<string, number>> {
-  const { data, error } = await supabase
-    .from("user_movies")
-    .select("feeling")
-    .eq("tmdb_id", tmdbId)
-    .not("feeling", "is", null);
+  const { data, error } = await supabase.rpc("movie_feeling_counts", { p_tmdb_id: tmdbId });
   if (error) throw error;
 
   const counts: Record<string, number> = {};
-  for (const row of data as { feeling: string | null }[]) {
-    if (!row.feeling) continue;
-    counts[row.feeling] = (counts[row.feeling] ?? 0) + 1;
+  for (const row of data as { feeling: string; count: number }[]) {
+    counts[row.feeling] = row.count;
   }
   return counts;
 }
