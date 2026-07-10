@@ -165,7 +165,8 @@ export default function TmdbMovieDetailScreen() {
   }
   async function handleRate(value: number) {
     if (!userRow) return;
-    const updated = await rateMovie(userRow.id, value, userRow.feeling);
+    const next = userRow.rating === value ? null : value;
+    const updated = await rateMovie(userRow.id, next, userRow.feeling);
     setUserRow(updated);
   }
   async function handleFeeling(key: string) {

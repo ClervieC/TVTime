@@ -27,13 +27,6 @@ export function WatchInfo({ trailerUrl, providers }: WatchInfoProps) {
 
   return (
     <View>
-      {trailerUrl && (
-        <Pressable style={styles.trailerBtn} onPress={() => Linking.openURL(trailerUrl)}>
-          <Ionicons name="play-circle" size={20} color={colors.onAccent} />
-          <Text style={styles.trailerBtnText}>{t.common.watchTrailer}</Text>
-        </Pressable>
-      )}
-
       {hasProviders && (
         <>
           <Text style={styles.sectionHeader}>{t.common.whereToWatch}</Text>
@@ -41,6 +34,13 @@ export function WatchInfo({ trailerUrl, providers }: WatchInfoProps) {
           <ProviderGroup label={t.common.rent} providers={providers!.rent} link={providers!.link} styles={styles} />
           <ProviderGroup label={t.common.buy} providers={providers!.buy} link={providers!.link} styles={styles} />
         </>
+      )}
+
+      {trailerUrl && (
+        <Pressable style={styles.trailerBtn} onPress={() => Linking.openURL(trailerUrl)}>
+          <Ionicons name="play-circle" size={20} color={colors.onAccent} />
+          <Text style={styles.trailerBtnText}>{t.common.watchTrailer}</Text>
+        </Pressable>
       )}
     </View>
   );

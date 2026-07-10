@@ -35,13 +35,18 @@ test("movie detail page renders title and cast", async ({ page }) => {
 // watchlist" step needed), rate, react, comment — then undo everything so
 // this dedicated test account's history stays clean across runs.
 test("can mark a movie watched, rate it, react, and comment", async ({ page }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(90_000);
   await page.goto(`/movie/tmdb/${MOVIE_ID}`);
   await expect(page.getByText(MOVIE_TITLE, { exact: false }).first()).toBeVisible({ timeout: 15_000 });
   await ensureUnwatched(page);
 
+  // "Mark as watched" only renders once userRowLoaded flips (see
+  // app/movie/tmdb/[id].tsx) — that's a Supabase round trip racing several
+  // TMDB detail/cast/trailer/providers/recommendations fetches on the same
+  // page load, so it can take a while longer than the default 5s wait.
+  await expect(page.getByLabel("Mark as watched")).toBeVisible({ timeout: 45_000 });
   await page.getByLabel("Mark as watched").click();
-  await expect(page.getByText("Your rating", { exact: true })).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByText("Your rating", { exact: true })).toBeVisible({ timeout: 15_000 });
 
   await page.getByLabel("Rate 5 stars").click();
 

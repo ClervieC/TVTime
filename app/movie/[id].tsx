@@ -167,7 +167,8 @@ export default function MovieDetailScreen() {
     setMovie(updated);
   }
   async function handleRate(value: number) {
-    const updated = await rateMovie(movie!.id, value, movie!.feeling);
+    const next = movie!.rating === value ? null : value;
+    const updated = await rateMovie(movie!.id, next, movie!.feeling);
     setMovie(updated);
   }
   async function handleFeeling(key: string) {

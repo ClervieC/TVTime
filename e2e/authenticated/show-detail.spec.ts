@@ -8,9 +8,12 @@ const SHOW_NAME = "Under the Dome";
 test("show detail page renders title, tabs, and cast", async ({ page }) => {
   await page.goto(`/show/${SHOW_ID}`);
 
-  await expect(page.getByText(SHOW_NAME)).toBeVisible();
-  await expect(page.getByText("Info", { exact: true }).first()).toBeVisible();
-  await expect(page.getByText("Episodes", { exact: true })).toBeVisible();
+  // Title comes from a real TVmaze fetch (no cache warm on a fresh test
+  // context) — worth a longer timeout than the default 5s since this is the
+  // very first network round trip on this page.
+  await expect(page.getByText(SHOW_NAME).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Info", { exact: true }).first()).toBeVisible({ timeout: 20_000 });
+  await expect(page.getByText("Episodes", { exact: true })).toBeVisible({ timeout: 20_000 });
   // Cast/Comments live under the Info tab — Episodes is the default tab
   // (see app/show/[id].tsx's useState) so they aren't visible until it's
   // selected.

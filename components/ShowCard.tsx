@@ -10,9 +10,13 @@ interface ShowCardProps {
   name: string;
   imageUrl: string | null;
   subtitle?: string;
+  // Defaults to navigating to /show/{id} — overridden by callers pointing
+  // this card at something else with its own id space (e.g. Profile's
+  // favorite-episodes row, where `id` is an episode id, not a show id).
+  onPress?: () => void;
 }
 
-export function ShowCard({ id, name, imageUrl, subtitle }: ShowCardProps) {
+export function ShowCard({ id, name, imageUrl, subtitle, onPress }: ShowCardProps) {
   const router = useRouter();
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -23,7 +27,7 @@ export function ShowCard({ id, name, imageUrl, subtitle }: ShowCardProps) {
     <Pressable
       onPressIn={onPressIn}
       onPressOut={onPressOut}
-      onPress={() => router.push(`/show/${id}`)}
+      onPress={onPress ?? (() => router.push(`/show/${id}`))}
     >
       <Animated.View
         style={[styles.card, { opacity: mountIn.opacity, transform: [...mountIn.transform, { scale }] }]}

@@ -7,7 +7,9 @@ import { File } from "expo-file-system";
 import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useAuth } from "../../context/AuthContext";
 import { supabase } from "../../lib/supabase";
-import { createList, fetchAllListItems, fetchEpisodeCount, fetchFavorites, fetchLists, fetchUserShows, ListItem, ShowList, UserShow } from "../../lib/userShows";
+import { createList, fetchAllListItems, fetchEpisodeCount, fetchFavoriteEpisodes, fetchFavorites, fetchLists, fetchUserShows, ListItem, ShowList, UserShow, WatchedEpisode } from "../../lib/userShows";
+import { getCachedShow } from "../../lib/showDataCache";
+import { getShow } from "../../lib/tvmaze";
 import { fetchUserMovies, fetchFavoriteMovies, UserMovie } from "../../lib/userMovies";
 import { importTvTimeCsv, importTvTimeJson, ImportProgress } from "../../lib/tvtimeImport";
 import { useColors, useThemeMode, radius, type, Colors, ThemeMode } from "../../lib/theme";
@@ -75,6 +77,9 @@ export default function ProfileScreen() {
   const [exportingData, setExportingData] = useState(false);
   const [openReportCount, setOpenReportCount] = useState(0);
   const [deletingAccount, setDeletingAccount] = useState(false);
+  const [favoriteEpisodes, setFavoriteEpisodes] = useState<
+    (WatchedEpisode & { showName: string; showImage: string | null })[]
+  >([]);
   const { unreadCount, refresh: refreshNotifications } = useNotifications();
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -130,6 +135,27 @@ export default function ProfileScreen() {
       setProfile(p);
       if (p) fetchFollowCounts(p.user_id).then(setFollowCounts);
       if (p?.is_admin) fetchOpenReportCount().then(setOpenReportCount).catch(() => {});
+    });
+    // watched_episodes only stores a tvmaze_show_id, not the show's own
+    // name/image (that lives on user_shows, a separate row) — same
+    // enrichment lib/activity.ts already does for the same reason, backed
+    // by the same on-disk show cache every other screen warms.
+    fetchFavoriteEpisodes().then(async (episodes) => {
+      const showIds = [...new Set(episodes.map((e) => e.tvmaze_show_id))];
+      const showById = new Map<number, { name: string; image: string | null }>();
+      await Promise.allSettled(
+        showIds.map(async (id) => {
+          const show = await getCachedShow(id, () => getShow(id));
+          showById.set(id, { name: show.name, image: show.image?.medium ?? null });
+        })
+      );
+      setFavoriteEpisodes(
+        episodes.map((e) => ({
+          ...e,
+          showName: showById.get(e.tvmaze_show_id)?.name ?? `#${e.tvmaze_show_id}`,
+          showImage: showById.get(e.tvmaze_show_id)?.image ?? null,
+        }))
+      );
     });
   }, []);
 
@@ -384,6 +410,29 @@ export default function ProfileScreen() {
           </>
         )}
       </ScrollView>
+
+      {favoriteEpisodes.length > 0 && (
+        <>
+          <SectionHeader title={t.profile.favoriteEpisodes} styles={styles} />
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
+            {favoriteEpisodes.map((e) => (
+              <ShowCard
+                key={e.id}
+                id={e.tvmaze_episode_id}
+                name={e.showName}
+                imageUrl={e.showImage}
+                subtitle={`S${String(e.season).padStart(2, "0")}E${String(e.number).padStart(2, "0")}`}
+                onPress={() =>
+                  router.push({
+                    pathname: "/episode/[id]",
+                    params: { id: String(e.tvmaze_episode_id), showId: String(e.tvmaze_show_id) },
+                  })
+                }
+              />
+            ))}
+          </ScrollView>
+        </>
+      )}
 
       <SectionHeader title={t.profile.lists} styles={styles} />
       {lists.map((list) => {

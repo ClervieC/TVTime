@@ -549,6 +549,20 @@ export default function ShowDetailScreen() {
                 </Text>
                 <Text style={styles.meta}>{show.status}</Text>
 
+                <WatchInfo trailerUrl={trailerUrl} providers={watchProviders} />
+
+                <View style={styles.divider} />
+                <Text style={styles.sectionHeader}>{t.showDetail.comments}</Text>
+                <CommentsSection
+                  comments={showComments}
+                  loading={commentsLoading}
+                  myUserId={myUserId}
+                  onSubmit={handlePostShowComment}
+                  onDelete={handleDeleteShowComment}
+                  onToggleReaction={handleToggleShowCommentReaction}
+                  reportTargetType="comment"
+                />
+
                 {cast.length > 0 && (
                   <>
                     <View style={styles.divider} />
@@ -578,20 +592,7 @@ export default function ShowDetailScreen() {
                   </>
                 )}
 
-                <WatchInfo trailerUrl={trailerUrl} providers={watchProviders} />
                 <RecommendationsRow items={recommendationItems} />
-
-                <View style={styles.divider} />
-                <Text style={styles.sectionHeader}>{t.showDetail.comments}</Text>
-                <CommentsSection
-                  comments={showComments}
-                  loading={commentsLoading}
-                  myUserId={myUserId}
-                  onSubmit={handlePostShowComment}
-                  onDelete={handleDeleteShowComment}
-                  onToggleReaction={handleToggleShowCommentReaction}
-                  reportTargetType="comment"
-                />
               </View>
             ) : (
               <View style={styles.section}>

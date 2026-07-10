@@ -631,3 +631,14 @@ create policy "Users manage their own show stats cache"
   for all
   using (auth.uid() = user_id)
   with check (auth.uid() = user_id);
+
+-- ============================================================
+-- Favorite episodes — a heart toggle on an already-watched episode (see
+-- episode/[id].tsx), listed in Profile the same way favorite shows/movies
+-- already are. Just a column on watched_episodes rather than a separate
+-- table: a favorite episode is inherently a watched one (nothing else has a
+-- row here to attach it to), so this is a one-to-one flag on data that
+-- already exists. Purely additive — safe to run once.
+-- ============================================================
+alter table public.watched_episodes
+  add column if not exists is_favorite boolean not null default false;

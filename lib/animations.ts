@@ -87,6 +87,37 @@ export function useSwipeDownToDismiss(onDismiss: () => void) {
   return { gesture, animatedStyle };
 }
 
+const SWIPE_DISTANCE = 60;
+const SWIPE_VELOCITY = 500;
+
+// Swipe left/right to change episode, scoped to whatever it's attached to
+// (the hero image — see EpisodePage in app/episode/[id].tsx) instead of the
+// whole page. That page also has a plain vertical ScrollView for its actual
+// content (summary, rating, comments); on web, the FlatList that pages
+// between episodes claims horizontal touch panning for its *entire* width
+// via CSS touch-action, and a descendant can't reliably carve out "but let
+// vertical panning through here" — the browser intersects the two, which
+// left neither direction usable in some spots. Detecting the swipe with our
+// own X-locked gesture here (activeOffsetX/failOffsetY, same shape as
+// useSwipeDownToDismiss's Y-locked one above) and disabling the FlatList's
+// own touch scrolling on web (see episode/[id].tsx) removes that conflict —
+// this becomes the only thing claiming horizontal touches, and only over the
+// hero image, so the rest of the page scrolls vertically like normal.
+export function useSwipeHorizontal(onSwipeLeft: () => void, onSwipeRight: () => void) {
+  const gesture = Gesture.Pan()
+    .activeOffsetX([-10, 10])
+    .failOffsetY([-10, 10])
+    .onEnd((e) => {
+      if (e.translationX < -SWIPE_DISTANCE || e.velocityX < -SWIPE_VELOCITY) {
+        runOnJS(onSwipeLeft)();
+      } else if (e.translationX > SWIPE_DISTANCE || e.velocityX > SWIPE_VELOCITY) {
+        runOnJS(onSwipeRight)();
+      }
+    });
+
+  return gesture;
+}
+
 // Drives Sheet's open/close transition. Unlike the other hooks here, the
 // component needs to stay mounted while animating OUT (a plain `if
 // (!visible) return null` pops instantly with no chance to animate), so this

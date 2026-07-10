@@ -158,6 +158,10 @@ export function MovieDetailView({
             <ActivityIndicator color={colors.textFaint} style={styles.overviewLoading} />
           ) : null}
 
+          <WatchInfo trailerUrl={trailerUrl ?? null} providers={watchProviders ?? null} />
+
+          {extraContent}
+
           {cast.length > 0 && (
             <>
               <Text style={styles.sectionHeader}>{t.showDetail.cast}</Text>
@@ -183,10 +187,7 @@ export function MovieDetailView({
             </>
           )}
 
-          <WatchInfo trailerUrl={trailerUrl ?? null} providers={watchProviders ?? null} />
           <RecommendationsRow items={recommendations ?? []} />
-
-          {extraContent}
         </View>
       </ScrollView>
     </View>

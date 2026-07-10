@@ -198,6 +198,7 @@ export interface WatchedEpisode {
   rating: number | null;
   feeling: string | null;
   times_watched: number;
+  is_favorite: boolean;
 }
 
 export async function fetchEpisodeCount(userId?: string) {
@@ -388,6 +389,34 @@ export async function rateEpisode(
     .eq("tvmaze_episode_id", tvmazeEpisodeId);
   if (error) throw error;
   invalidateWatchedEpisodes(showId);
+}
+
+// Only ever called on an episode that's already watched (see the heart
+// toggle in app/episode/[id].tsx, gated the same way rating/feeling are) —
+// a favorite with nothing watched to attach it to has no row to set this on.
+export async function setEpisodeFavorite(showId: number, tvmazeEpisodeId: number, isFavorite: boolean) {
+  const { error } = await supabase
+    .from("watched_episodes")
+    .update({ is_favorite: isFavorite })
+    .eq("tvmaze_episode_id", tvmazeEpisodeId);
+  if (error) throw error;
+  invalidateWatchedEpisodes(showId);
+}
+
+// For Profile's "Favorite episodes" section — global across every show,
+// mirroring fetchWatchedEpisodesPage's own global (not per-show) query.
+export async function fetchFavoriteEpisodes(): Promise<WatchedEpisode[]> {
+  const userId = await getCurrentUserId();
+  if (!userId) return [];
+
+  const { data, error } = await supabase
+    .from("watched_episodes")
+    .select("*")
+    .eq("user_id", userId)
+    .eq("is_favorite", true)
+    .order("watched_at", { ascending: false });
+  if (error) throw error;
+  return data as WatchedEpisode[];
 }
 
 // Aggregate, anonymous count of how everyone who's watched this episode felt

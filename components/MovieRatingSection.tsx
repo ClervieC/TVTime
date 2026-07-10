@@ -177,7 +177,7 @@ function createStyles(colors: Colors) {
     },
     starsRow: { flexDirection: "row", justifyContent: "center", gap: 12, marginBottom: 20 },
     starCol: { alignItems: "center" },
-    feelingsRow: { flexDirection: "row", justifyContent: "space-between" },
+    feelingsRow: { flexDirection: "row", flexWrap: "wrap", justifyContent: "center", gap: 4 },
     feelingChip: { alignItems: "center", gap: 4, padding: 8, borderRadius: radius.sm },
     feelingChipActive: { backgroundColor: colors.accentSoft },
     feelingEmoji: { fontSize: 26 },

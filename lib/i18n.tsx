@@ -128,6 +128,7 @@ const en = {
   profile: {
     statistics: "Statistics",
     favorites: "Favorites",
+    favoriteEpisodes: "Favorite episodes",
     lists: "Lists",
     shows: "Shows",
     dropped: "Stopped",
@@ -256,6 +257,8 @@ const en = {
     othersFelt: "How others felt",
     comments: "Comments",
     unwatchedPrompt: "Mark this episode as watched to rate it, react, and see comments.",
+    addFavorite: "Add to favorite episodes",
+    removeFavorite: "Remove from favorite episodes",
   },
   comments: {
     placeholder: "Add a comment...",
@@ -441,6 +444,7 @@ const fr: typeof en = {
   profile: {
     statistics: "Statistiques",
     favorites: "Favoris",
+    favoriteEpisodes: "Épisodes favoris",
     lists: "Listes",
     shows: "Séries",
     dropped: "Arrêtées",
@@ -569,6 +573,8 @@ const fr: typeof en = {
     othersFelt: "Le ressenti des autres",
     comments: "Commentaires",
     unwatchedPrompt: "Marque l'épisode comme vu pour le noter, réagir et voir les commentaires.",
+    addFavorite: "Ajouter aux épisodes favoris",
+    removeFavorite: "Retirer des épisodes favoris",
   },
   comments: {
     placeholder: "Ajouter un commentaire...",
