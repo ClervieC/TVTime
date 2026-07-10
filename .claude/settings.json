@@ -12,7 +12,8 @@
       "Bash(grep -il \"test@\\\\|demo@\\\\|password\" README*)",
       "Bash(NODE_PATH=\"/Users/clervie/.npm/_npx/e41f203b7505f1fb/node_modules\" node pw-legal.js)",
       "Bash(NODE_PATH=\"/Users/clervie/.npm/_npx/e41f203b7505f1fb/node_modules\" node pw-splash.js)",
-      "Bash(jobs -l)"
+      "Bash(jobs -l)",
+      "Bash(grep -n \"<FlatList\\\\|</FlatList\\\\|FlatList$\\\\|FlatList \" \"/Users/clervie/Desktop/Projects/Epify/app/episode/[id].tsx\")"
     ]
   },
   "enabledPlugins": {

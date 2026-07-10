@@ -3,7 +3,6 @@ import {
   View,
   Text,
   ScrollView,
-  FlatList,
   Pressable,
   Animated,
   StyleSheet,
@@ -12,13 +11,11 @@ import {
   Share,
   Platform,
   useWindowDimensions,
-  NativeSyntheticEvent,
-  NativeScrollEvent,
 } from "react-native";
 import { LinearGradient } from "expo-linear-gradient";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { GestureDetector } from "react-native-gesture-handler";
+import { Gesture, GestureDetector, ScrollView as GestureScrollView } from "react-native-gesture-handler";
 import Reanimated from "react-native-reanimated";
 import {
   getShow,
@@ -100,28 +97,27 @@ export default function EpisodeDetailScreen() {
   >({});
   const [currentIndex, setCurrentIndex] = useState(0);
   const [loading, setLoading] = useState(true);
-  const [positioned, setPositioned] = useState(false);
   const [reporting, setReporting] = useState(false);
-  const listRef = useRef<FlatList<TVMazeEpisode>>(null);
-  const hasScrolledToInitial = useRef(false);
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, spoilerMode } = useLanguage();
-  // A horizontal swipe-paged list with vertical scrolling content nested
-  // inside works fine with real touch input (native, or an actual mobile
-  // browser), but on a desktop browser the mouse wheel gets captured by the
-  // horizontal scroller and never reaches the vertical content underneath —
-  // there's no way to scroll down at all. Wide viewports (desktop web) skip
-  // the horizontal pager entirely and show one episode with prev/next
-  // buttons instead, avoiding the nested-scroll conflict altogether.
+  // A horizontally-paged list with vertical scrolling content nested inside
+  // each page is fragile with real touch input — getting a Pan-based swipe
+  // gesture, a nested scroll view, and a native horizontal pager to all
+  // agree on who owns a given touch turned out not to be reliably fixable
+  // (see git history on this file for the escalating attempts). Only the
+  // current episode is ever rendered instead, with a dedicated swipe gesture
+  // scoped to the hero image driving next/previous directly — no nested
+  // scrollable pager at all, so there's nothing left to compete with the
+  // page's own vertical scroll. Desktop web is the one exception: mouse/
+  // keyboard input has no swipe gesture to begin with, so it gets a sidebar
+  // + prev/next buttons instead (see isDesktopWeb below).
   const isDesktopWeb = Platform.OS === "web" && width >= 700;
 
   useFocusEffect(
     useCallback(() => {
       let active = true;
       setLoading(true);
-      setPositioned(false);
-      hasScrolledToInitial.current = false;
 
       // Episodes + watched status are the only two things this page actually
       // needs to render and position itself correctly, and both are already
@@ -167,51 +163,6 @@ export default function EpisodeDetailScreen() {
       };
     }, [initialEpisodeId, showIdNum]),
   );
-
-  // Resizing a desktop browser window across the 700px breakpoint mid-episode
-  // flips isDesktopWeb and switches which branch renders below — including
-  // mounting a brand new FlatList when moving back to the mobile branch.
-  // Without this, hasScrolledToInitial/positioned would still be left over
-  // from before the switch, so the positioning effect below would skip
-  // re-running and the freshly mounted FlatList would just sit at its
-  // default offset (episode index 0) instead of the real current episode.
-  useEffect(() => {
-    hasScrolledToInitial.current = false;
-    setPositioned(false);
-  }, [isDesktopWeb]);
-
-  // FlatList's initialScrollIndex prop is unreliable for this — especially on
-  // web, it's been observed landing on the wrong page for larger indexes (e.g.
-  // opening S3E2 would show S1E2 instead), so positioning is done imperatively
-  // here instead and the FlatList is kept hidden (see `positioned` below)
-  // until it lands correctly, so the wrong episode is never visible even
-  // briefly. Runs once per episode open (hasScrolledToInitial is reset in the
-  // focus effect above), not on every currentIndex change from swiping.
-  useEffect(() => {
-    if (isDesktopWeb || loading || hasScrolledToInitial.current) return;
-    hasScrolledToInitial.current = true;
-    const targetIndex = currentIndex;
-    const attempt = () =>
-      listRef.current?.scrollToOffset({
-        offset: targetIndex * width,
-        animated: false,
-      });
-    requestAnimationFrame(() =>
-      requestAnimationFrame(() => {
-        attempt();
-        setPositioned(true);
-      }),
-    );
-    setTimeout(() => {
-      attempt();
-      setPositioned(true);
-    }, 80);
-  }, [loading, currentIndex, width]);
-
-  function onScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
-    const index = Math.round(e.nativeEvent.contentOffset.x / width);
-    setCurrentIndex((prev) => (prev === index ? prev : index));
-  }
 
   // Only used by the desktop sidebar, but computed unconditionally since
   // hooks can't be called after the early loading return below.
@@ -408,7 +359,6 @@ export default function EpisodeDetailScreen() {
               watched={watchedMap[currentEpisode.id] ?? null}
               remaining={remaining}
               spoilerMode={spoilerMode}
-              active
               sideInset={SIDE_NAV_INSET}
               onToggleWatched={() => toggleWatched(currentEpisode)}
               onRewatch={() => rewatchEpisode(currentEpisode)}
@@ -443,103 +393,13 @@ export default function EpisodeDetailScreen() {
     );
   }
 
-  // Web (any width narrow enough to land here — isDesktopWeb already
-  // returned above for wide viewports) renders a single episode page, no
-  // horizontal FlatList at all — same reasoning the desktop branch already
-  // used for the *mouse wheel* getting captured by a horizontal scroller
-  // (see the isDesktopWeb comment above): the touch/swipe equivalent of that
-  // same conflict was blocking vertical scrolling of each page's own content
-  // on mobile web, and CSS touch-action zoning couldn't reliably fix it
-  // nested inside a still-horizontally-scrollable FlatList. Swiping to the
-  // next/previous episode instead goes through the hero-scoped gesture (see
-  // useSwipeHorizontal in lib/animations.ts) driving goToIndex directly,
-  // with no scrollable horizontal container involved at all.
-  if (Platform.OS === "web") {
-    const currentEpisode = episodes[currentIndex];
-    return (
-      <View style={styles.container}>
-        <View style={styles.overlay} pointerEvents="box-none">
-          <View style={styles.overlayTopRow}>
-            <Pressable
-              style={styles.iconBtn}
-              onPress={goBack}
-              accessibilityRole="button"
-              accessibilityLabel="Close"
-            >
-              <Ionicons name="chevron-down" size={22} color="#fff" />
-            </Pressable>
-            <View style={[styles.dotsRow, { flex: 1, justifyContent: "center" }]}>
-              {dotIndices.map((i) => (
-                <View
-                  key={i}
-                  style={[styles.dot, i === currentIndex && styles.dotActive]}
-                />
-              ))}
-            </View>
-            <View style={{ flexDirection: "row", gap: 10 }}>
-              <Pressable
-                style={styles.iconBtn}
-                onPress={() => shareEpisode(currentEpisode)}
-                accessibilityRole="button"
-                accessibilityLabel="Share"
-              >
-                <Ionicons name="share-outline" size={20} color="#fff" />
-              </Pressable>
-              <Pressable
-                style={styles.iconBtn}
-                onPress={() => setReporting(true)}
-                accessibilityRole="button"
-                accessibilityLabel={t.report.reportEpisode}
-              >
-                <Ionicons name="flag-outline" size={18} color="#fff" />
-              </Pressable>
-            </View>
-          </View>
-          {show && (
-            <Pressable
-              style={styles.showPill}
-              onPress={() => router.push(`/show/${show.id}`)}
-            >
-              <Text style={styles.showPillText}>{show.name.toUpperCase()}</Text>
-              <Ionicons name="chevron-forward" size={12} color="#111" />
-            </Pressable>
-          )}
-        </View>
-
-        <EpisodePage
-          key={currentEpisode.id}
-          episode={currentEpisode}
-          showId={showIdNum}
-          cast={cast}
-          width={width}
-          watched={watchedMap[currentEpisode.id] ?? null}
-          remaining={remaining}
-          spoilerMode={spoilerMode}
-          active
-          onToggleWatched={() => toggleWatched(currentEpisode)}
-          onRewatch={() => rewatchEpisode(currentEpisode)}
-          onRate={(n) => setRating(currentEpisode, n)}
-          onFeeling={(key) => setFeeling(currentEpisode, key)}
-          onToggleFavorite={() => toggleFavorite(currentEpisode)}
-          onSwipeNext={() => goToIndex(currentIndex + 1)}
-          onSwipePrev={() => goToIndex(currentIndex - 1)}
-          colors={colors}
-          styles={styles}
-          t={t}
-        />
-        <ReportModal
-          visible={reporting}
-          onClose={() => setReporting(false)}
-          target={{
-            targetType: "episode",
-            targetTvmazeShowId: showIdNum,
-            targetTvmazeEpisodeId: currentEpisode.id,
-          }}
-        />
-      </View>
-    );
-  }
-
+  // Everything that isn't desktop web (native iOS/Android, and mobile web)
+  // shares this one render: a single current episode, no horizontal pager.
+  // Swiping to the next/previous episode goes through the hero-scoped
+  // gesture (see useSwipeHorizontal in lib/animations.ts) driving goToIndex
+  // directly, with no scrollable horizontal container involved at all — see
+  // the isDesktopWeb comment above for why that matters.
+  const currentEpisode = episodes[currentIndex];
   return (
     <View style={styles.container}>
       <View style={styles.overlay} pointerEvents="box-none">
@@ -563,7 +423,7 @@ export default function EpisodeDetailScreen() {
           <View style={{ flexDirection: "row", gap: 10 }}>
             <Pressable
               style={styles.iconBtn}
-              onPress={() => shareEpisode(episodes[currentIndex])}
+              onPress={() => shareEpisode(currentEpisode)}
               accessibilityRole="button"
               accessibilityLabel="Share"
             >
@@ -590,66 +450,33 @@ export default function EpisodeDetailScreen() {
         )}
       </View>
 
-      <FlatList
-        style={styles.episodesList}
-        ref={listRef}
-        data={episodes}
-        keyExtractor={(ep) => String(ep.id)}
-        horizontal
-        pagingEnabled
-        showsHorizontalScrollIndicator={false}
-        // Virtualization only renders a small window of pages around index 0
-        // by default — if the tapped episode (e.g. S3E2) falls outside that
-        // window, scrollToOffset moves the viewport to the right pixel
-        // offset before that page has actually been created, landing on
-        // whatever nearby page IS rendered instead. Rendering every episode
-        // page up front removes that race entirely; episode counts per show
-        // are small enough (rarely more than a couple hundred) for this to
-        // be cheap.
-        initialNumToRender={episodes.length}
-        getItemLayout={(_data, index) => ({
-          length: width,
-          offset: width * index,
-          index,
-        })}
-        onScroll={onScroll}
-        scrollEventThrottle={16}
-        renderItem={({ item: episode, index }) => (
-          <EpisodePage
-            episode={episode}
-            showId={showIdNum}
-            cast={cast}
-            width={width}
-            watched={watchedMap[episode.id] ?? null}
-            remaining={remaining}
-            spoilerMode={spoilerMode}
-            // Every page is mounted up front (see initialNumToRender above),
-            // but comments/votes/feelings are still only worth fetching for
-            // the page you're actually on or about to swipe to.
-            active={Math.abs(index - currentIndex) <= 1}
-            onToggleWatched={() => toggleWatched(episode)}
-            onRewatch={() => rewatchEpisode(episode)}
-            onRate={(n) => setRating(episode, n)}
-            onFeeling={(key) => setFeeling(episode, key)}
-            onToggleFavorite={() => toggleFavorite(episode)}
-            colors={colors}
-            styles={styles}
-            t={t}
-          />
-        )}
+      <EpisodePage
+        key={currentEpisode.id}
+        episode={currentEpisode}
+        showId={showIdNum}
+        cast={cast}
+        width={width}
+        watched={watchedMap[currentEpisode.id] ?? null}
+        remaining={remaining}
+        spoilerMode={spoilerMode}
+        onToggleWatched={() => toggleWatched(currentEpisode)}
+        onRewatch={() => rewatchEpisode(currentEpisode)}
+        onRate={(n) => setRating(currentEpisode, n)}
+        onFeeling={(key) => setFeeling(currentEpisode, key)}
+        onToggleFavorite={() => toggleFavorite(currentEpisode)}
+        onSwipeNext={() => goToIndex(currentIndex + 1)}
+        onSwipePrev={() => goToIndex(currentIndex - 1)}
+        colors={colors}
+        styles={styles}
+        t={t}
       />
-      {!positioned && (
-        <View style={styles.loadingOverlay}>
-          <ActivityIndicator color={colors.black} />
-        </View>
-      )}
       <ReportModal
         visible={reporting}
         onClose={() => setReporting(false)}
         target={{
           targetType: "episode",
           targetTvmazeShowId: showIdNum,
-          targetTvmazeEpisodeId: episodes[currentIndex]?.id,
+          targetTvmazeEpisodeId: currentEpisode.id,
         }}
       />
     </View>
@@ -778,7 +605,6 @@ function EpisodePage({
   watched,
   remaining,
   spoilerMode,
-  active,
   sideInset,
   onToggleWatched,
   onRewatch,
@@ -798,7 +624,6 @@ function EpisodePage({
   watched: WatchedEpisode | null;
   remaining: number | null;
   spoilerMode: boolean;
-  active: boolean;
   sideInset?: number;
   onToggleWatched: () => void;
   onRewatch: () => void;
@@ -816,13 +641,31 @@ function EpisodePage({
   const goBack = useGoBack("/(tabs)");
   const { gesture: swipeDownGesture, animatedStyle: swipeDownStyle } =
     useSwipeDownToDismiss(goBack);
-  // Swiping left means "go to next episode", right means previous — scoped
-  // to the whole page below, not just the hero (see the GestureDetector
-  // wrapping the ScrollView further down).
+  // Swiping left means "go to next episode", right means previous.
   const swipeHorizontalGesture = useSwipeHorizontal(
     () => onSwipeNext?.(),
     () => onSwipePrev?.()
   );
+  // Desktop web doesn't pass onSwipeNext/onSwipePrev — it navigates with the
+  // sidebar and prev/next buttons instead (see the isDesktopWeb branch in
+  // EpisodeDetailScreen), so there's nothing for the horizontal gesture to do.
+  const canSwipeHorizontally = !!(onSwipeNext || onSwipePrev);
+  // Both gestures are scoped to the hero image only, not the whole scrollable
+  // page — on web this matters a lot more than the activeOffsetX/failOffsetY
+  // locking suggests: react-native-gesture-handler's web backend expresses a
+  // Pan gesture's directions as a static CSS touch-action on the element it's
+  // attached to, which the browser commits to upfront rather than releasing
+  // mid-touch the way a native recognizer can. Wrapping the *entire*
+  // vertically-scrolling page in this gesture was quietly telling mobile
+  // Safari not to hand any touch there to native scrolling at all, no matter
+  // what the gesture's own JS-side logic decided — hence swiping not
+  // scrolling anywhere on the page, not just over the hero. Keeping both
+  // gestures confined to the small hero area means only that area is ever
+  // subject to that restriction; everything below it is a plain native touch
+  // scroll with no gesture-handler involvement whatsoever.
+  const heroGesture = canSwipeHorizontally
+    ? Gesture.Race(swipeDownGesture, swipeHorizontalGesture)
+    : swipeDownGesture;
 
   const [myUserId, setMyUserId] = useState<string | null>(null);
   const [comments, setComments] = useState<EnrichedComment[]>([]);
@@ -840,12 +683,9 @@ function EpisodePage({
   const lastCountedFeeling = useRef<string | null>(watched?.feeling ?? null);
 
   // Comments/votes/feelings are spoiler-sensitive, same as the rest of this
-  // gated section — nothing is fetched until the episode is unlocked. `active`
-  // additionally limits this to the page the user is actually on (or next to)
-  // since every page is mounted up front (see initialNumToRender on the
-  // FlatList) purely to make initial positioning reliable.
+  // gated section — nothing is fetched until the episode is unlocked.
   useEffect(() => {
-    if (!unlocked || !active) return;
+    if (!unlocked) return;
     let isCurrent = true;
     getCurrentUserId().then((id) => isCurrent && setMyUserId(id ?? null));
     setCommentsLoading(true);
@@ -865,7 +705,7 @@ function EpisodePage({
     return () => {
       isCurrent = false;
     };
-  }, [unlocked, active, episode.id]);
+  }, [unlocked, episode.id]);
 
   // Reflects the user's own feeling toggle in "How others felt" immediately
   // instead of waiting for the next full page load — fetchEpisodeFeelingCounts
@@ -954,35 +794,19 @@ function EpisodePage({
   }
 
   return (
-    // Horizontal swipe (next/previous episode) is scoped to the whole page,
-    // not just the hero image — now that web no longer nests this inside a
-    // horizontally-scrollable FlatList (see the isDesktopWeb/Platform.OS
-    // === "web" branches above), there's no ancestor competing for
-    // horizontal touches, so this can safely cover the full scroll area. It
-    // coexists with the ScrollView's own vertical scrolling because it's
-    // X-locked (activeOffsetX/failOffsetY in useSwipeHorizontal) — a
-    // vertical-dominant touch fails this gesture immediately and falls
-    // through to the native scroll underneath, same principle as the
-    // hero-only pull-down-to-dismiss gesture just below.
-    <GestureDetector gesture={swipeHorizontalGesture}>
-      <ScrollView
-        style={{ width, height: "100%" }}
-        contentContainerStyle={styles.page}
-        showsVerticalScrollIndicator={false}
-      >
-        <GestureDetector gesture={swipeDownGesture}>
-          <Reanimated.View style={[styles.hero, swipeDownStyle]}>
-          {episode.image && active ? (
+    <GestureScrollView
+      style={{ width, height: "100%" }}
+      contentContainerStyle={styles.page}
+      showsVerticalScrollIndicator={false}
+    >
+      <GestureDetector gesture={heroGesture}>
+        <Reanimated.View style={[styles.hero, swipeDownStyle]}>
+          {episode.image ? (
             <Image
               source={{ uri: episode.image.original }}
               style={styles.heroImage}
             />
           ) : (
-            // Every page mounts up front for scroll-positioning reasons (see
-            // initialNumToRender on the FlatList), but there's no reason to
-            // also request full-res images for pages the user isn't near —
-            // `active` (current +/-1) gates the actual image request the
-            // same way it already gates comments/votes/feelings fetching.
             <View
               style={[
                 styles.heroImage,
@@ -1177,8 +1001,7 @@ function EpisodePage({
           </>
         )}
       </Animated.View>
-      </ScrollView>
-    </GestureDetector>
+    </GestureScrollView>
   );
 }
 
@@ -1255,23 +1078,11 @@ function FeelingChip({
 function createStyles(colors: Colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    episodesList: { flex: 1 },
     center: {
       flex: 1,
       alignItems: "center",
       justifyContent: "center",
       backgroundColor: colors.background,
-    },
-    loadingOverlay: {
-      position: "absolute",
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      alignItems: "center",
-      justifyContent: "center",
-      backgroundColor: colors.background,
-      zIndex: 20,
     },
     overlay: {
       position: "absolute",
