@@ -1,17 +1,37 @@
 import { useEffect, useRef, useState } from "react";
-import { Animated } from "react-native";
+import { Animated, Platform } from "react-native";
 import { Gesture } from "react-native-gesture-handler";
 import { runOnJS, useAnimatedStyle, useSharedValue, withSpring } from "react-native-reanimated";
+
+// react-native-web has no native animated module at all, so useNativeDriver:
+// true there is a silent no-op that falls back to JS-driven animation
+// anyway — just with a console warning on every single Animated call. Native
+// platforms still want true (it's the whole point — animations run off the
+// JS thread). Exported so components/AppSplash.tsx and
+// components/WatchedCheck.tsx, which drive their own Animated calls outside
+// this file's hooks, use the same rule instead of hardcoding `true`.
+export const NATIVE_DRIVER = Platform.OS !== "web";
 
 export function useScalePress(toValue = 0.95) {
   const scale = useRef(new Animated.Value(1)).current;
 
   function onPressIn() {
-    Animated.spring(scale, { toValue, useNativeDriver: true, speed: 50, bounciness: 6 }).start();
+    Animated.spring(scale, { toValue, useNativeDriver: NATIVE_DRIVER, speed: 50, bounciness: 6 }).start();
   }
 
   function onPressOut() {
-    Animated.spring(scale, { toValue: 1, useNativeDriver: true, speed: 50, bounciness: 6 }).start();
+    Animated.spring(scale, { toValue: 1, useNativeDriver: NATIVE_DRIVER, speed: 50, bounciness: 6 }).start();
+    // Web only: a Pressable's underlying DOM node takes browser focus on
+    // click, and RN Web never clears it. Most presses here navigate to
+    // another screen, and expo-router's native-stack-on-web keeps the
+    // screen being left behind mounted (marked aria-hidden) rather than
+    // unmounting it — so that still-focused node ends up inside an
+    // aria-hidden ancestor, which is exactly the "Blocked aria-hidden...
+    // descendant retained focus" warning React logs. Blurring right as the
+    // press completes, before the navigation/aria-hidden lands, avoids it.
+    if (Platform.OS === "web" && typeof document !== "undefined") {
+      (document.activeElement as HTMLElement | null)?.blur?.();
+    }
   }
 
   return { scale, onPressIn, onPressOut };
@@ -23,18 +43,23 @@ export function useFadeIn(ready: boolean) {
   useEffect(() => {
     if (!ready) return;
     opacity.setValue(0);
-    Animated.timing(opacity, { toValue: 1, duration: 250, useNativeDriver: true }).start();
+    Animated.timing(opacity, { toValue: 1, duration: 250, useNativeDriver: NATIVE_DRIVER }).start();
   }, [ready, opacity]);
 
   return opacity;
 }
 
-export function useMountIn() {
+// delay staggers a grid of these (e.g. app/streaks.tsx's badge cards) so
+// they pop in one after another instead of all at once — purely cosmetic,
+// defaults to 0 for every existing call site's simultaneous-fade-in behavior.
+export function useMountIn(delay = 0) {
   const progress = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    Animated.timing(progress, { toValue: 1, duration: 280, useNativeDriver: true }).start();
-  }, [progress]);
+    const anim = Animated.timing(progress, { toValue: 1, duration: 280, delay, useNativeDriver: NATIVE_DRIVER });
+    anim.start();
+    return () => anim.stop();
+  }, [progress, delay]);
 
   const translateY = progress.interpolate({ inputRange: [0, 1], outputRange: [10, 0] });
   return { opacity: progress, transform: [{ translateY }] };
@@ -50,7 +75,7 @@ export function useFlashPulse() {
 
   function flash() {
     opacity.setValue(0.35);
-    Animated.timing(opacity, { toValue: 0, duration: 500, useNativeDriver: true }).start();
+    Animated.timing(opacity, { toValue: 0, duration: 500, useNativeDriver: NATIVE_DRIVER }).start();
   }
 
   return { opacity, flash };
@@ -130,9 +155,9 @@ export function useSheetTransition(visible: boolean) {
   useEffect(() => {
     if (visible) {
       setMounted(true);
-      Animated.spring(progress, { toValue: 1, useNativeDriver: true, speed: 16, bounciness: 4 }).start();
+      Animated.spring(progress, { toValue: 1, useNativeDriver: NATIVE_DRIVER, speed: 16, bounciness: 4 }).start();
     } else {
-      Animated.timing(progress, { toValue: 0, duration: 200, useNativeDriver: true }).start(({ finished }) => {
+      Animated.timing(progress, { toValue: 0, duration: 200, useNativeDriver: NATIVE_DRIVER }).start(({ finished }) => {
         if (finished) setMounted(false);
       });
     }
@@ -146,7 +171,7 @@ export function useGrowIn(trigger: unknown) {
 
   useEffect(() => {
     scaleX.setValue(0);
-    Animated.timing(scaleX, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    Animated.timing(scaleX, { toValue: 1, duration: 220, useNativeDriver: NATIVE_DRIVER }).start();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [trigger]);
 

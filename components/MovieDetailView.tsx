@@ -90,7 +90,7 @@ export function MovieDetailView({
             {heroImage ? (
               <>
                 <Image source={{ uri: heroImage }} style={styles.heroImage} contentFit="cover" />
-                <LinearGradient colors={["transparent", colors.background]} style={styles.heroGradient} pointerEvents="none" />
+                <LinearGradient colors={["transparent", colors.background]} style={[styles.heroGradient, { pointerEvents: "none" }]} />
               </>
             ) : (
               <Text style={styles.heroPlaceholder}>{title[0]?.toUpperCase()}</Text>

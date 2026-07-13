@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useRef, useState } from "react";
-import { View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from "react-native";
+import { Animated, View, Text, FlatList, Pressable, ActivityIndicator, StyleSheet } from "react-native";
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { fetchFollowingActivity, ActivityItem } from "../../lib/activity";
@@ -12,6 +13,7 @@ import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
 import { useScrollToTopOnTabPress } from "../../lib/useScrollToTopOnTabPress";
 import { useActivityUnseen } from "../../context/ActivityContext";
+import { useMountIn } from "../../lib/animations";
 import { Avatar } from "../../components/Avatar";
 import { EmptyState } from "../../components/EmptyState";
 
@@ -43,9 +45,24 @@ function formatDate(iso: string): string {
 // One feed row for any ActivityItem kind — image/title/verb/meta vary by
 // kind (see lib/activity.ts), but the avatar+username+timestamp shell and
 // tap-to-open behavior are identical either way.
-function ActivityRow({ item, t, colors, styles }: { item: ActivityItem; t: Translations; colors: Colors; styles: Styles }) {
+function ActivityRow({
+  item,
+  index,
+  t,
+  colors,
+  styles,
+}: {
+  item: ActivityItem;
+  index: number;
+  t: Translations;
+  colors: Colors;
+  styles: Styles;
+}) {
   const router = useRouter();
   const username = item.user?.username ?? "?";
+  // Only the first screenful staggers — capped so a long feed doesn't leave
+  // rows 30+ waiting on a multi-second delay chain before they ever appear.
+  const mountIn = useMountIn(Math.min(index, 8) * 45);
 
   let image: string | null = null;
   let title = "";
@@ -98,49 +115,51 @@ function ActivityRow({ item, t, colors, styles }: { item: ActivityItem; t: Trans
   }
 
   return (
-    <Pressable
-      style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
-      onPress={onPress}
-    >
-      <View style={styles.avatarWrap}>
-        <Avatar name={username} size="sm" />
-        <View style={[styles.kindBadge, { backgroundColor: rating != null || feeling ? colors.accent : colors.blue }]}>
-          <Ionicons name={kindIcon(item.kind)} size={11} color={colors.onAccent} />
+    <Animated.View style={{ opacity: mountIn.opacity, transform: mountIn.transform }}>
+      <Pressable
+        style={({ pressed }) => [styles.row, pressed && styles.rowPressed]}
+        onPress={onPress}
+      >
+        <View style={styles.avatarWrap}>
+          <Avatar name={username} imageUri={item.user?.avatar_url} size="sm" />
+          <View style={[styles.kindBadge, { backgroundColor: rating != null || feeling ? colors.accent : colors.blue }]}>
+            <Ionicons name={kindIcon(item.kind)} size={11} color={colors.onAccent} />
+          </View>
         </View>
-      </View>
-      <View style={styles.rowContent}>
-        <Text style={styles.rowText}>
-          <Text style={styles.username}>{username}</Text>
-          <Text style={styles.verb}> {verb} </Text>
-          <Text style={styles.title}>{title}</Text>
-        </Text>
-        {body && (
-          <Text style={styles.body} numberOfLines={2}>
-            {body}
+        <View style={styles.rowContent}>
+          <Text style={styles.rowText}>
+            <Text style={styles.username}>{username}</Text>
+            <Text style={styles.verb}> {verb} </Text>
+            <Text style={styles.title}>{title}</Text>
           </Text>
+          {body && (
+            <Text style={styles.body} numberOfLines={2}>
+              {body}
+            </Text>
+          )}
+          <View style={styles.metaRow}>
+            {rating != null && (
+              <View style={styles.metaChip}>
+                <Text style={styles.metaChipText}>⭐ {rating}</Text>
+              </View>
+            )}
+            {feeling && (
+              <View style={styles.metaChip}>
+                <Text style={styles.metaChipText}>{feelingEmoji(feeling)}</Text>
+              </View>
+            )}
+            <Text style={styles.metaTime}>{formatDate(item.createdAt)}</Text>
+          </View>
+        </View>
+        {image ? (
+          <Image source={{ uri: image }} style={styles.thumb} contentFit="cover" />
+        ) : (
+          <View style={[styles.thumb, styles.thumbPlaceholder]}>
+            <Ionicons name="film-outline" size={18} color={colors.textFaint} />
+          </View>
         )}
-        <View style={styles.metaRow}>
-          {rating != null && (
-            <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>⭐ {rating}</Text>
-            </View>
-          )}
-          {feeling && (
-            <View style={styles.metaChip}>
-              <Text style={styles.metaChipText}>{feelingEmoji(feeling)}</Text>
-            </View>
-          )}
-          <Text style={styles.metaTime}>{formatDate(item.createdAt)}</Text>
-        </View>
-      </View>
-      {image ? (
-        <Image source={{ uri: image }} style={styles.thumb} contentFit="cover" />
-      ) : (
-        <View style={[styles.thumb, styles.thumbPlaceholder]}>
-          <Ionicons name="film-outline" size={18} color={colors.textFaint} />
-        </View>
-      )}
-    </Pressable>
+      </Pressable>
+    </Animated.View>
   );
 }
 
@@ -195,7 +214,11 @@ export default function ActivityScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.header}>{t.activity.title}</Text>
+      <LinearGradient colors={[`${colors.accent}1f`, "transparent"]} style={styles.headerGlow} />
+      <View style={styles.headerBlock}>
+        <Text style={styles.header}>{t.activity.title}</Text>
+        {!loading && items.length > 0 && <Text style={styles.subtitle}>{t.activity.subtitle}</Text>}
+      </View>
       {loading ? (
         <ActivityIndicator color={colors.black} style={{ marginTop: 24 }} />
       ) : items.length === 0 ? (
@@ -208,7 +231,7 @@ export default function ActivityScreen() {
           ref={listRef}
           data={items}
           keyExtractor={(item) => item.id}
-          renderItem={({ item }) => <ActivityRow item={item} t={t} colors={colors} styles={styles} />}
+          renderItem={({ item, index }) => <ActivityRow item={item} index={index} t={t} colors={colors} styles={styles} />}
           ItemSeparatorComponent={() => <View style={styles.separator} />}
           contentContainerStyle={styles.list}
           showsVerticalScrollIndicator={false}
@@ -228,7 +251,10 @@ type Styles = ReturnType<typeof createStyles>;
 function createStyles(colors: Colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
-    header: { fontSize: type.title, fontWeight: "800", color: colors.text, padding: 16, paddingBottom: 12 },
+    headerGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 140, pointerEvents: "none" },
+    headerBlock: { padding: 16, paddingBottom: 12 },
+    header: { fontSize: type.title, fontWeight: "800", color: colors.text },
+    subtitle: { fontSize: type.bodySm, color: colors.textMuted, marginTop: 2 },
     list: { paddingHorizontal: 16, paddingBottom: 32 },
     separator: { height: 10 },
     row: {

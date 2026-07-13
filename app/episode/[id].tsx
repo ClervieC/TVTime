@@ -278,10 +278,7 @@ export default function EpisodeDetailScreen() {
     const atEnd = currentIndex === episodes.length - 1;
     return (
       <View style={styles.container}>
-        <View
-          style={[styles.overlay, { right: SIDEBAR_WIDTH }]}
-          pointerEvents="box-none"
-        >
+        <View style={[styles.overlay, { right: SIDEBAR_WIDTH, pointerEvents: "box-none" }]}>
           <View style={styles.overlayTopRow}>
             <Pressable
               style={styles.iconBtn}
@@ -402,7 +399,7 @@ export default function EpisodeDetailScreen() {
   const currentEpisode = episodes[currentIndex];
   return (
     <View style={styles.container}>
-      <View style={styles.overlay} pointerEvents="box-none">
+      <View style={[styles.overlay, { pointerEvents: "box-none" }]}>
         <View style={styles.overlayTopRow}>
           <Pressable
             style={styles.iconBtn}
@@ -816,8 +813,7 @@ function EpisodePage({
           )}
           <LinearGradient
             colors={["transparent", colors.background]}
-            style={styles.heroGradient}
-            pointerEvents="none"
+            style={[styles.heroGradient, { pointerEvents: "none" }]}
           />
           <View style={styles.heroBottom}>
             <Text style={styles.code}>

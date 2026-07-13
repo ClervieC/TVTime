@@ -118,7 +118,7 @@ export default function UserProfileScreen() {
       />
 
       <View style={styles.profileHeader}>
-        <Avatar name={profile.username} size="lg" />
+        <Avatar name={profile.username} imageUri={profile.avatar_url} size="lg" />
         <Text style={styles.username}>{profile.username}</Text>
         <FollowButton following={isFollowing} loading={busy} onPress={toggleFollow} />
       </View>

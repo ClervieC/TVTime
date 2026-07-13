@@ -5,23 +5,38 @@ import { test, expect } from "@playwright/test";
 // specifically designed for". A crash or a stuck spinner here is a real
 // finding even if none of these are realistic day-to-day usage.
 
-test("navigating to a non-existent show id doesn't crash the app", async ({ page }) => {
+test("navigating to a non-existent show id shows the error state, not a stuck spinner", async ({ page }) => {
   // TVmaze ids are sequential and finite — this one is astronomically
-  // unlikely to ever exist.
+  // unlikely to ever exist. getShow() rejects for it, which app/show/[id].tsx
+  // now catches into a dedicated DetailErrorState (see
+  // components/DetailErrorState.tsx) instead of sitting on its loading
+  // spinner forever with no way back.
   await page.goto("/show/999999999");
-  // No hard assertion on *what* renders (a 404 state doesn't exist today —
-  // see app/show/[id].tsx, which has no try/catch around getShow()) — the
-  // bar here is just that the tab bar/root app shell is still there and
-  // responsive, not a white screen or an infinite spinner.
-  await page.waitForTimeout(3000);
-  await expect(page.locator("body")).toBeVisible();
-  // The ErrorBoundary fallback text — if this shows, the getShow() rejection
-  // above escalated into a render-time crash somewhere, which would be a
-  // real bug to fix (unhandled promise rejections shouldn't reach here).
-  await expect(page.getByText("Something went wrong")).not.toBeVisible();
+  await expect(page.getByText("Something went wrong", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Back to Shows", { exact: true })).toBeVisible();
+
+  // This is the ErrorBoundary's own ("Try again") fallback title too, so
+  // confirming it's *this* screen and not a render-time crash matters —
+  // the back button must actually work, not just render.
+  await page.getByText("Back to Shows", { exact: true }).click();
+  await expect(page).toHaveURL(/\/$|\/index$/);
+  await expect(page.getByText("My list", { exact: true })).toBeVisible({ timeout: 10_000 });
 });
 
-test("navigating to a non-existent movie id doesn't crash the app", async ({ page }) => {
+test("navigating to a non-existent movie id shows the error state, not a stuck spinner", async ({ page }) => {
+  // No matching user_movies row for this id — fetchUserMovie() resolves
+  // null (see lib/userMovies.ts), which app/movie/[id].tsx now treats the
+  // same as a thrown error rather than looping on <MovieDetailLoading />.
+  await page.goto("/movie/00000000-0000-0000-0000-000000000000");
+  await expect(page.getByText("Something went wrong", { exact: true })).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText("Back to Shows", { exact: true })).toBeVisible();
+});
+
+test("navigating to a non-existent tmdb movie id doesn't crash the app", async ({ page }) => {
+  // Unlike app/movie/[id].tsx above, the TMDB-browsing route already had its
+  // own graceful tmdbNotFound handling before this session's error-state
+  // work — kept as a plain non-crash check since it renders inline, not via
+  // DetailErrorState.
   await page.goto("/movie/tmdb/999999999");
   await page.waitForTimeout(3000);
   await expect(page.getByText("Something went wrong")).not.toBeVisible();

@@ -3,6 +3,7 @@ import { Animated, Pressable, StyleSheet, GestureResponderEvent, Text } from "re
 import { Ionicons } from "@expo/vector-icons";
 import { useColors, Colors } from "../lib/theme";
 import { useRewatchPrompt } from "../context/RewatchPromptContext";
+import { NATIVE_DRIVER } from "../lib/animations";
 
 interface WatchedCheckProps {
   watched: boolean;
@@ -25,8 +26,8 @@ export function WatchedCheck({ watched, timesWatched, onToggle, onRewatch, size 
     // watched." Lower tension + higher friction stretches the settle out
     // without looking sluggish.
     Animated.sequence([
-      Animated.timing(scale, { toValue: 0.7, duration: 150, useNativeDriver: true }),
-      Animated.spring(scale, { toValue: 1, friction: 4, tension: 80, useNativeDriver: true }),
+      Animated.timing(scale, { toValue: 0.7, duration: 150, useNativeDriver: NATIVE_DRIVER }),
+      Animated.spring(scale, { toValue: 1, friction: 4, tension: 80, useNativeDriver: NATIVE_DRIVER }),
     ]).start();
   }
 

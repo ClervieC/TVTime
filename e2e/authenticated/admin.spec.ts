@@ -3,8 +3,10 @@ import { test, expect } from "@playwright/test";
 // causer.clervie@gmail.com (the test account e2e/auth.setup.ts logs in
 // with) has profiles.is_admin = true specifically so this can be tested end
 // to end — see supabase/schema.sql's "Admins view all reports" policy.
-test("admin panel is reachable from Profile and shows the moderation console", async ({ page }) => {
-  await page.goto("/profile");
+test("admin panel is reachable from Settings and shows the moderation console", async ({ page }) => {
+  // Settings/Legal/Account (including the admin row) moved out of Profile
+  // into their own screen behind the gear icon (see app/settings.tsx).
+  await page.goto("/settings");
   await page.getByText("Admin", { exact: true }).click();
   await expect(page).toHaveURL(/\/admin/);
 

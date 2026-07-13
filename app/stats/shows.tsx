@@ -1,8 +1,10 @@
-import { useCallback, useMemo, useState } from "react";
-import { View, Text, ScrollView, Pressable, ActivityIndicator, StyleSheet } from "react-native";
-import { useRouter, useFocusEffect } from "expo-router";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { View, Text, ScrollView, Pressable, ActivityIndicator, StyleSheet, ImageStyle, ViewStyle } from "react-native";
+import { Image } from "expo-image";
+import { useRouter, useFocusEffect, useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
-import { computeShowStats, fetchCachedShowStats, loadLocalShowStats, saveShowStats, ShowStats } from "../../lib/showStats";
+import { computeShowStats, fetchCachedShowStats, loadLocalShowStats, saveShowStats, ShowStats, TopMovie } from "../../lib/showStats";
+import { posterUrl, searchMovie } from "../../lib/tmdb";
 import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage } from "../../lib/i18n";
 import { EmptyState } from "../../components/EmptyState";
@@ -16,12 +18,14 @@ const STATS_TTL_MS = 6 * 60 * 60 * 1000;
 
 export default function ShowStatsScreen() {
   const router = useRouter();
+  const { tab: initialTabParam } = useLocalSearchParams<{ tab?: string }>();
   const goBack = useGoBack("/(tabs)/profile");
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t, language } = useLanguage();
   const [stats, setStats] = useState<ShowStats | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [tab, setTab] = useState<"shows" | "movies">(initialTabParam === "movies" ? "movies" : "shows");
 
   useFocusEffect(
     useCallback(() => {
@@ -61,10 +65,17 @@ export default function ShowStatsScreen() {
   const episodesPerWeek = stats?.episodesPerWeek ?? [];
   const episodesPerMonth = stats?.episodesPerMonth ?? [];
   const genreBreakdown = stats?.genreBreakdown ?? [];
+  const topShows = stats?.topShows ?? [];
+  const moviesPerMonth = stats?.moviesPerMonth ?? [];
+  const topMovies = stats?.topMovies ?? [];
   const maxWeekCount = Math.max(1, ...episodesPerWeek.map((w) => w.count));
   const maxMonthCount = Math.max(1, ...episodesPerMonth.map((m) => m.count));
+  const maxMovieMonthCount = Math.max(1, ...moviesPerMonth.map((m) => m.count));
   const maxGenreCount = genreBreakdown.length > 0 ? genreBreakdown[0].count : 1;
-  const hasAnyHistory = !!stats && (episodesPerWeek.some((w) => w.count > 0) || genreBreakdown.length > 0);
+  const hasShowHistory = !!stats && (episodesPerWeek.some((w) => w.count > 0) || genreBreakdown.length > 0);
+  const hasMovieHistory = !!stats && (stats.totalMoviesWatched ?? 0) > 0;
+  const hasAnyHistory = hasShowHistory || hasMovieHistory;
+  const hasCurrentTabHistory = tab === "shows" ? hasShowHistory : hasMovieHistory;
 
   return (
     <View style={styles.container}>
@@ -76,12 +87,27 @@ export default function ShowStatsScreen() {
         <View style={{ width: 24, alignItems: "flex-end" }}>{refreshing && <ActivityIndicator size="small" color={colors.textFaint} />}</View>
       </View>
 
+      {stats && hasAnyHistory && (
+        <View style={styles.subTabs}>
+          <Pressable style={[styles.subTab, tab === "shows" && styles.subTabActive]} onPress={() => setTab("shows")}>
+            <Text style={[styles.subTabText, tab === "shows" && styles.subTabTextActive]}>{t.showStats.showsTab}</Text>
+          </Pressable>
+          <Pressable style={[styles.subTab, tab === "movies" && styles.subTabActive]} onPress={() => setTab("movies")}>
+            <Text style={[styles.subTabText, tab === "movies" && styles.subTabTextActive]}>{t.showStats.moviesSection}</Text>
+          </Pressable>
+        </View>
+      )}
+
       {!stats ? (
         <ActivityIndicator color={colors.black} style={{ marginTop: 24 }} />
       ) : !hasAnyHistory ? (
         <EmptyState icon="stats-chart-outline" title={t.showStats.noHistory} />
+      ) : !hasCurrentTabHistory ? (
+        <EmptyState icon="stats-chart-outline" title={t.showStats.noHistory} />
       ) : (
         <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+        {tab === "shows" && (
+          <>
           <View style={styles.card}>
             <View style={styles.cardHeaderRow}>
               <Text style={styles.cardTitle}>{t.showStats.episodesPerWeek}</Text>
@@ -202,6 +228,96 @@ export default function ShowStatsScreen() {
             </View>
           )}
 
+          {topShows.length > 0 && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{t.showStats.topShows}</Text>
+              <View style={{ marginTop: 12, gap: 12 }}>
+                {topShows.map((s, i) => (
+                  <View key={s.showId} style={styles.topRow}>
+                    <Text style={styles.topRank}>{i + 1}</Text>
+                    {s.image ? (
+                      <Image source={{ uri: s.image }} style={styles.topPoster} contentFit="cover" />
+                    ) : (
+                      <View style={[styles.topPoster, styles.topPosterFallback]} />
+                    )}
+                    <Text style={styles.topTitle} numberOfLines={2}>
+                      {s.name}
+                    </Text>
+                    <Text style={styles.topCount}>{t.showStats.bingeCount(s.episodeCount)}</Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+          </>
+        )}
+
+        {tab === "movies" && (
+          <>
+          <View style={styles.card}>
+            <View style={styles.cardHeaderRow}>
+              <Text style={styles.cardTitle}>{t.showStats.moviesPerMonth}</Text>
+              <Text style={styles.cardHeaderMeta}>
+                {t.showStats.avgPerMonth((stats?.averageMoviesPerMonth ?? 0).toFixed(1))}
+              </Text>
+            </View>
+            <View style={styles.chartRow}>
+              {moviesPerMonth.map((month) => (
+                <View key={month.monthStart} style={styles.barColumn}>
+                  <Text style={styles.barValue}>{month.count > 0 ? month.count : ""}</Text>
+                  <View
+                    style={[
+                      styles.bar,
+                      {
+                        height: Math.max(4, (month.count / maxMovieMonthCount) * 96),
+                        backgroundColor: month.count > 0 ? colors.accent : colors.pillBg,
+                      },
+                    ]}
+                  />
+                  <Text style={styles.barLabel}>
+                    {new Date(month.monthStart).toLocaleDateString(language === "fr" ? "fr-FR" : "en-US", {
+                      month: "short",
+                    })}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
+          <View style={styles.card}>
+            <View style={styles.remainingRow}>
+              <View style={styles.remainingIcon}>
+                <Ionicons name="film-outline" size={20} color={colors.accent} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.remainingValue}>{(stats?.totalMoviesWatched ?? 0).toLocaleString()}</Text>
+                <Text style={styles.cardTitle}>{t.showStats.totalMoviesWatched}</Text>
+              </View>
+            </View>
+          </View>
+
+          {topMovies.length > 0 && (
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>{t.showStats.topMovies}</Text>
+              <View style={{ marginTop: 12, gap: 12 }}>
+                {topMovies.map((m, i) => (
+                  <View key={m.movieId} style={styles.topRow}>
+                    <Text style={styles.topRank}>{i + 1}</Text>
+                    <TopMoviePoster movie={m} style={styles.topPoster} fallbackStyle={styles.topPosterFallback} />
+                    <Text style={styles.topTitle} numberOfLines={2}>
+                      {m.title}
+                    </Text>
+                    <Text style={styles.topCount}>
+                      {m.timesWatched > 1 ? t.showStats.watchCount(m.timesWatched) : ""}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+          )}
+          </>
+        )}
+
           {stats && (
             <Text style={styles.updatedAt}>
               {t.showStats.computedAt(new Date(stats.computedAt).toLocaleString(language === "fr" ? "fr-FR" : "en-US"))}
@@ -210,6 +326,39 @@ export default function ShowStatsScreen() {
         </ScrollView>
       )}
     </View>
+  );
+}
+
+// Mirrors MovieCard's own fallback (components/MovieCard.tsx) — rows watched
+// before poster_path was persisted on user_movies have it null, and without
+// this, Top Movies just showed an empty placeholder box for every one of
+// those instead of a poster.
+function TopMoviePoster({
+  movie,
+  style,
+  fallbackStyle,
+}: {
+  movie: TopMovie;
+  style: ImageStyle;
+  fallbackStyle: ViewStyle;
+}) {
+  const [searchedPosterPath, setSearchedPosterPath] = useState<string | null>(null);
+  useEffect(() => {
+    if (movie.posterPath) return;
+    let active = true;
+    searchMovie(movie.title, movie.year)
+      .then((match) => active && setSearchedPosterPath(match?.poster_path ?? null))
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [movie.title, movie.year, movie.posterPath]);
+  const poster = posterUrl(movie.posterPath ?? searchedPosterPath, "w200");
+
+  return poster ? (
+    <Image source={{ uri: poster }} style={style} contentFit="cover" />
+  ) : (
+    <View style={[style, fallbackStyle]} />
   );
 }
 
@@ -225,6 +374,11 @@ function createStyles(colors: Colors) {
       paddingBottom: 12,
     },
     title: { fontSize: type.title, fontWeight: "800", color: colors.text },
+    subTabs: { flexDirection: "row", gap: 8, paddingHorizontal: 16, paddingBottom: 12 },
+    subTab: { flex: 1, paddingVertical: 8, borderRadius: radius.pill, alignItems: "center", backgroundColor: colors.pillBg },
+    subTabActive: { backgroundColor: colors.accent },
+    subTabText: { fontSize: type.bodySm, fontWeight: "700", color: colors.textMuted },
+    subTabTextActive: { color: colors.onAccent },
     content: { padding: 16, paddingBottom: 40, gap: 14 },
     card: {
       backgroundColor: colors.surface,
@@ -258,5 +412,20 @@ function createStyles(colors: Colors) {
     genreTrack: { height: 8, borderRadius: 4, backgroundColor: colors.pillBg, overflow: "hidden" },
     genreFill: { height: 8, borderRadius: 4, backgroundColor: colors.accent },
     updatedAt: { fontSize: type.micro, color: colors.textFaint, textAlign: "center", marginTop: 4 },
+    sectionDivider: {
+      fontSize: type.caption,
+      fontWeight: "800",
+      color: colors.textFaint,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+      marginTop: 8,
+      marginBottom: 2,
+    },
+    topRow: { flexDirection: "row", alignItems: "center", gap: 10 },
+    topRank: { width: 18, fontSize: type.bodySm, fontWeight: "800", color: colors.textFaint },
+    topPoster: { width: 36, height: 52, borderRadius: radius.sm, backgroundColor: colors.pillBg },
+    topPosterFallback: {},
+    topTitle: { flex: 1, fontSize: type.bodySm, fontWeight: "700", color: colors.text },
+    topCount: { fontSize: type.caption, color: colors.textFaint },
   });
 }

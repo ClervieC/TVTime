@@ -1,34 +1,32 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, ScrollView, Pressable, StyleSheet, TextInput, ActivityIndicator, Platform, Switch, Linking } from "react-native";
+import { Animated, View, Text, ScrollView, Pressable, StyleSheet, TextInput, ActivityIndicator } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
+import { useMountIn } from "../../lib/animations";
 import * as DocumentPicker from "expo-document-picker";
-import { File } from "expo-file-system";
-import { activateKeepAwakeAsync, deactivateKeepAwake } from "expo-keep-awake";
 import { useAuth } from "../../context/AuthContext";
-import { supabase } from "../../lib/supabase";
 import { createList, fetchAllListItems, fetchEpisodeCount, fetchFavoriteEpisodes, fetchFavorites, fetchLists, fetchUserShows, ListItem, ShowList, UserShow, WatchedEpisode } from "../../lib/userShows";
 import { getCachedShow } from "../../lib/showDataCache";
 import { getShow } from "../../lib/tvmaze";
 import { fetchUserMovies, fetchFavoriteMovies, UserMovie } from "../../lib/userMovies";
-import { importTvTimeCsv, importTvTimeJson, ImportProgress } from "../../lib/tvtimeImport";
-import { useColors, useThemeMode, radius, type, Colors, ThemeMode } from "../../lib/theme";
-import { useLanguage, Translations } from "../../lib/i18n";
-import { Language } from "../../lib/userSettings";
-import { fetchMyProfile, Profile } from "../../lib/profiles";
+import { useColors, radius, type, Colors } from "../../lib/theme";
+import { useLanguage } from "../../lib/i18n";
+import { fetchMyProfile, uploadAvatar, Profile } from "../../lib/profiles";
 import { fetchFollowCounts } from "../../lib/follows";
-import { changePassword, exportMyData, deleteAccount } from "../../lib/account";
 import { fetchOpenReportCount } from "../../lib/reports";
+import { fetchOpenSupportMessageCount } from "../../lib/support";
+import { isRecapAvailable } from "../../lib/recap";
+import { computeStreakData, loadLocalStreakData, StreakData } from "../../lib/streaks";
+import { useBadgeUnlockToast } from "../../context/BadgeUnlockContext";
 import { loadProfileSnapshot, saveProfileSnapshot } from "../../lib/profileSnapshot";
 import { alert } from "../../lib/alert";
 import { useScrollToTopOnTabPress } from "../../lib/useScrollToTopOnTabPress";
 import { useNotifications } from "../../context/NotificationsContext";
 import { ShowCard } from "../../components/ShowCard";
 import { MovieCard } from "../../components/MovieCard";
-import { Pill } from "../../components/Pill";
 import { Avatar } from "../../components/Avatar";
 import { EmptyState } from "../../components/EmptyState";
-import { Sheet } from "../../components/Sheet";
 
 const AVG_EPISODE_MINUTES = 42;
 // TMDB runtime per movie isn't fetched in bulk here (that's up to 700+ calls
@@ -66,25 +64,19 @@ export default function ProfileScreen() {
   const [episodeCount, setEpisodeCount] = useState(0);
   const [creatingList, setCreatingList] = useState(false);
   const [newListName, setNewListName] = useState("");
-  const [importing, setImporting] = useState(false);
-  const [importProgress, setImportProgress] = useState<ImportProgress | null>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [followCounts, setFollowCounts] = useState({ followers: 0, following: 0 });
-  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
-  const [newPassword, setNewPassword] = useState("");
-  const [changingPassword, setChangingPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState<string | null>(null);
-  const [exportingData, setExportingData] = useState(false);
-  const [openReportCount, setOpenReportCount] = useState(0);
-  const [deletingAccount, setDeletingAccount] = useState(false);
   const [favoriteEpisodes, setFavoriteEpisodes] = useState<
     (WatchedEpisode & { showName: string; showImage: string | null })[]
   >([]);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+  const [streakData, setStreakData] = useState<StreakData | null>(null);
+  const [hasAdminAlerts, setHasAdminAlerts] = useState(false);
   const { unreadCount, refresh: refreshNotifications } = useNotifications();
+  const announceBadges = useBadgeUnlockToast();
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
-  const { t, language, setLanguage, spoilerMode, setSpoilerMode } = useLanguage();
-  const { themeMode, setThemeMode } = useThemeMode();
+  const { t } = useLanguage();
 
   const lastLoadedAt = useRef(0);
   const scrollRef = useRef<ScrollView>(null);
@@ -134,7 +126,11 @@ export default function ProfileScreen() {
     fetchMyProfile().then((p) => {
       setProfile(p);
       if (p) fetchFollowCounts(p.user_id).then(setFollowCounts);
-      if (p?.is_admin) fetchOpenReportCount().then(setOpenReportCount).catch(() => {});
+      if (p?.is_admin) {
+        Promise.all([fetchOpenReportCount(), fetchOpenSupportMessageCount()])
+          .then(([reports, support]) => setHasAdminAlerts(reports + support > 0))
+          .catch(() => {});
+      }
     });
     // watched_episodes only stores a tvmaze_show_id, not the show's own
     // name/image (that lives on user_shows, a separate row) — same
@@ -157,7 +153,16 @@ export default function ProfileScreen() {
         }))
       );
     });
-  }, []);
+    // Local IndexedDB read first — instant, no network round trip — then a
+    // fresh compute reconciles it in the background. Without this the streak
+    // banner stayed blank until the full computation (a watched_episodes
+    // scan plus several count queries) finished on every single Profile
+    // visit.
+    loadLocalStreakData().then((local) => {
+      if (local) setStreakData(local);
+    });
+    computeStreakData(announceBadges).then(setStreakData).catch(() => {});
+  }, [announceBadges]);
 
   // Stable references so MovieCard's memo() can skip re-rendering unrelated
   // cards — a movie can appear in both `movies` and `favoriteMovies`, so both
@@ -184,56 +189,6 @@ export default function ProfileScreen() {
     }, [load, refreshNotifications])
   );
 
-  async function handleChangePassword() {
-    setPasswordError(null);
-    if (newPassword.length < 6) {
-      setPasswordError(t.profile.changePasswordTooShort);
-      return;
-    }
-    setChangingPassword(true);
-    try {
-      await changePassword(newPassword);
-      setNewPassword("");
-      setChangePasswordOpen(false);
-      alert(t.profile.changePassword, t.profile.changePasswordSuccess);
-    } catch (err) {
-      setPasswordError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setChangingPassword(false);
-    }
-  }
-
-  async function handleDownloadData() {
-    setExportingData(true);
-    try {
-      await exportMyData();
-    } catch {
-      alert(t.profile.downloadMyData, t.profile.downloadMyDataFailed);
-    } finally {
-      setExportingData(false);
-    }
-  }
-
-  function handleDeleteAccount() {
-    alert(t.profile.deleteAccountConfirmTitle, t.profile.deleteAccountConfirmMessage, [
-      { text: t.profile.deleteAccountConfirmButton, style: "destructive", onPress: confirmDeleteAccount },
-      { text: t.common.cancel, style: "cancel" },
-    ]);
-  }
-
-  async function confirmDeleteAccount() {
-    setDeletingAccount(true);
-    try {
-      await deleteAccount();
-      // deleteAccount() already signs out — AuthContext's session listener
-      // (see context/AuthContext.tsx) takes it from there and redirects to
-      // login, same as a normal sign-out.
-    } catch {
-      setDeletingAccount(false);
-      alert(t.profile.deleteAccount, t.profile.deleteAccountFailed);
-    }
-  }
-
   async function handleCreateList() {
     if (!newListName.trim()) return;
     await createList(newListName.trim());
@@ -242,54 +197,18 @@ export default function ProfileScreen() {
     fetchLists().then(setLists);
   }
 
-  async function handleImportTvTime() {
-    const result = await DocumentPicker.getDocumentAsync({
-      type: ["text/csv", "text/comma-separated-values", "application/json", "*/*"],
-      copyToCacheDirectory: true,
-    });
+  async function handleChangeAvatar() {
+    const result = await DocumentPicker.getDocumentAsync({ type: "image/*", copyToCacheDirectory: true });
     if (result.canceled) return;
-
     const asset = result.assets[0];
-    const name = asset.name.toLowerCase();
-    const isJson = name.endsWith(".json");
-    const isCsv = name.endsWith(".csv");
-    if (!isJson && !isCsv) {
-      alert(t.profile.importInvalidFileTitle, t.profile.importInvalidFileMsg);
-      return;
-    }
-
-    setImporting(true);
-    setImportProgress(null);
-    await activateKeepAwakeAsync("tvtime-import");
+    setUploadingAvatar(true);
     try {
-      let text: string;
-      if (Platform.OS === "web") {
-        if (!asset.file) throw new Error(t.profile.importReadError);
-        text = await asset.file.text();
-      } else {
-        text = await new File(asset.uri).text();
-      }
-      const summary = isJson ? await importTvTimeJson(text, setImportProgress) : await importTvTimeCsv(text, setImportProgress);
-      load();
-
-      const unmatchedNote =
-        summary.showsUnmatched.length > 0
-          ? t.profile.importUnmatched(
-              summary.showsUnmatched.length,
-              summary.showsUnmatched.slice(0, 5).join(", ") + (summary.showsUnmatched.length > 5 ? "…" : "")
-            )
-          : "";
-
-      alert(
-        t.profile.importDoneTitle,
-        t.profile.importDone(summary.showsImported, summary.episodesImported, summary.moviesImported) + unmatchedNote
-      );
-    } catch (e) {
-      alert(t.profile.importFailedTitle, e instanceof Error ? e.message : t.profile.importFailedUnknown);
+      const avatarUrl = await uploadAvatar(asset.uri, asset.mimeType ?? "image/jpeg");
+      setProfile((prev) => (prev ? { ...prev, avatar_url: avatarUrl } : prev));
+    } catch {
+      alert(t.profile.changePhoto, t.profile.changePhotoFailed);
     } finally {
-      setImporting(false);
-      setImportProgress(null);
-      deactivateKeepAwake("tvtime-import");
+      setUploadingAvatar(false);
     }
   }
 
@@ -302,10 +221,22 @@ export default function ProfileScreen() {
   const movieWatchCount = useMemo(() => movies.reduce((sum, m) => sum + m.times_watched, 0), [movies]);
   const movieTime = formatTvTime(movieWatchCount * AVG_MOVIE_MINUTES);
 
+  const headerIn = useMountIn();
+
   return (
     <ScrollView ref={scrollRef} style={styles.container} showsVerticalScrollIndicator={false}>
-      <View style={styles.header}>
-        <Avatar name={displayName} size="md" />
+      <LinearGradient colors={[`${colors.accent}1f`, "transparent"]} style={styles.headerGlow} />
+      <Animated.View style={[styles.header, { opacity: headerIn.opacity, transform: headerIn.transform }]}>
+        <Pressable onPress={handleChangeAvatar} disabled={uploadingAvatar} accessibilityRole="button" accessibilityLabel={t.profile.changePhoto}>
+          <Avatar name={displayName} imageUri={profile?.avatar_url} size="md" />
+          <View style={styles.avatarEditBadge}>
+            {uploadingAvatar ? (
+              <ActivityIndicator size="small" color={colors.onAccent} />
+            ) : (
+              <Ionicons name="camera" size={13} color={colors.onAccent} />
+            )}
+          </View>
+        </Pressable>
         <View style={styles.headerInfo}>
           <Text style={styles.username}>{displayName}</Text>
           {!!email && (
@@ -323,7 +254,16 @@ export default function ProfileScreen() {
           <Ionicons name="notifications-outline" size={20} color={colors.text} />
           {unreadCount > 0 && <View style={styles.bellBadge} />}
         </Pressable>
-      </View>
+        <Pressable
+          style={styles.bellBtn}
+          onPress={() => router.push("/settings")}
+          accessibilityRole="button"
+          accessibilityLabel={t.profile.settings}
+        >
+          <Ionicons name="settings-outline" size={20} color={colors.text} />
+          {hasAdminAlerts && <View style={styles.bellBadge} />}
+        </Pressable>
+      </Animated.View>
 
       {profile && (
         <View style={styles.followRow}>
@@ -350,10 +290,41 @@ export default function ProfileScreen() {
         <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
       </Pressable>
 
+      {isRecapAvailable() && (
+        <Pressable style={styles.recapBanner} onPress={() => router.push("/recap")}>
+          <View style={styles.recapBannerIcon}>
+            <Ionicons name="sparkles" size={20} color={colors.onAccent} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.recapBannerTitle}>{t.profile.recapTitle(new Date().getFullYear())}</Text>
+            <Text style={styles.recapBannerSubtitle}>{t.profile.recapSubtitle}</Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.onAccent} />
+        </Pressable>
+      )}
+
+      {streakData && (
+        <Pressable style={styles.streakBanner} onPress={() => router.push("/streaks")}>
+          <View style={styles.streakBannerIcon}>
+            <Ionicons name="flame" size={20} color="#ff9f43" />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.streakBannerTitle}>{t.profile.streaksTitle}</Text>
+            <Text style={styles.streakBannerSubtitle}>
+              {streakData.currentStreak > 0
+                ? t.profile.streakBannerActive(streakData.currentStreak)
+                : t.profile.streakBannerInactive}
+            </Text>
+          </View>
+          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
+        </Pressable>
+      )}
+
       <SectionHeader title={t.profile.statistics} styles={styles} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.statsRow}>
         <StatCard
           icon="time-outline"
+          color={colors.blue}
           label={t.profile.watchTime}
           value={`${tvTime.months}${t.profile.months[0]} ${tvTime.days}${t.profile.days[0]} ${tvTime.hours}${t.profile.hours[0]}`}
           colors={colors}
@@ -362,6 +333,7 @@ export default function ProfileScreen() {
         />
         <StatCard
           icon="checkmark-circle-outline"
+          color={colors.green}
           label={t.profile.episodesWatched}
           value={episodeCount.toLocaleString()}
           colors={colors}
@@ -370,50 +342,38 @@ export default function ProfileScreen() {
         />
         <StatCard
           icon="time-outline"
+          color={colors.red}
           label={t.profile.movieWatchTime}
           value={`${movieTime.months}${t.profile.months[0]} ${movieTime.days}${t.profile.days[0]} ${movieTime.hours}${t.profile.hours[0]}`}
           colors={colors}
           styles={styles}
+          onPress={() => router.push("/stats/shows?tab=movies")}
         />
         <StatCard
           icon="checkmark-circle-outline"
+          color={colors.yellow}
           label={t.profile.moviesWatched}
           value={movies.length.toLocaleString()}
           colors={colors}
           styles={styles}
+          onPress={() => router.push("/stats/shows?tab=movies")}
         />
       </ScrollView>
 
-      <SectionHeader title={t.profile.favorites} styles={styles} />
+      <SectionHeader title={t.profile.favorites} count={favorites.length} styles={styles} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
-        {favorites.length === 0 && favoriteMovies.length === 0 ? (
+        {favorites.length === 0 ? (
           <Text style={styles.empty}>{t.profile.noFavorites}</Text>
         ) : (
-          <>
-            {favorites.map((s) => (
-              <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
-            ))}
-            {favoriteMovies.map((m) => (
-              <View key={m.id} style={styles.movieCardWrap}>
-                <MovieCard
-                  id={m.id}
-                  title={m.title}
-                  year={m.year}
-                  posterPath={m.poster_path}
-                  watchedAt={m.watched_at ?? m.created_at}
-                  timesWatched={m.times_watched}
-                  onUnwatched={handleMovieUnwatched}
-                  onRewatched={handleMovieRewatched}
-                />
-              </View>
-            ))}
-          </>
+          favorites.map((s) => (
+            <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
+          ))
         )}
       </ScrollView>
 
       {favoriteEpisodes.length > 0 && (
         <>
-          <SectionHeader title={t.profile.favoriteEpisodes} styles={styles} />
+          <SectionHeader title={t.profile.favoriteEpisodes} count={favoriteEpisodes.length} styles={styles} />
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
             {favoriteEpisodes.map((e) => (
               <ShowCard
@@ -434,7 +394,64 @@ export default function ProfileScreen() {
         </>
       )}
 
-      <SectionHeader title={t.profile.lists} styles={styles} />
+      <SectionHeader title={t.profile.shows} count={shows.length} styles={styles} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
+        {shows.length === 0 ? (
+          <Text style={styles.empty}>{t.profile.noShows}</Text>
+        ) : (
+          shows.map((s) => (
+            <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
+          ))
+        )}
+      </ScrollView>
+
+      <SectionHeader title={t.profile.favoriteMovies} count={favoriteMovies.length} styles={styles} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
+        {favoriteMovies.length === 0 ? (
+          <Text style={styles.empty}>{t.profile.noFavoriteMovies}</Text>
+        ) : (
+          favoriteMovies.map((m) => (
+            <View key={m.id} style={styles.movieCardWrap}>
+              <MovieCard
+                id={m.id}
+                title={m.title}
+                year={m.year}
+                posterPath={m.poster_path}
+                watchedAt={m.watched_at ?? m.created_at}
+                timesWatched={m.times_watched}
+                onUnwatched={handleMovieUnwatched}
+                onRewatched={handleMovieRewatched}
+              />
+            </View>
+          ))
+        )}
+      </ScrollView>
+
+      <SectionHeader title={t.profile.movies} count={movies.length} styles={styles} />
+      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
+        {movies.length === 0 ? (
+          <Text style={styles.empty}>{t.profile.noMovies}</Text>
+        ) : (
+          movies
+            .slice(0, 20)
+            .map((m) => (
+              <View key={m.id} style={styles.movieCardWrap}>
+                <MovieCard
+                  id={m.id}
+                  title={m.title}
+                  year={m.year}
+                  posterPath={m.poster_path}
+                  watchedAt={m.watched_at ?? m.created_at}
+                  timesWatched={m.times_watched}
+                  onUnwatched={handleMovieUnwatched}
+                  onRewatched={handleMovieRewatched}
+                />
+              </View>
+            ))
+        )}
+      </ScrollView>
+
+      <SectionHeader title={t.profile.lists} count={lists.length} styles={styles} />
       {lists.map((list) => {
         const items = listItems.filter((i) => i.list_id === list.id);
         return (
@@ -476,42 +493,7 @@ export default function ProfileScreen() {
         </Pressable>
       )}
 
-      <SectionHeader title={t.profile.shows} styles={styles} />
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
-        {shows.length === 0 ? (
-          <Text style={styles.empty}>{t.profile.noShows}</Text>
-        ) : (
-          shows.map((s) => (
-            <ShowCard key={s.id} id={s.tvmaze_id} name={s.show_name} imageUrl={s.show_image} />
-          ))
-        )}
-      </ScrollView>
-
-      <SectionHeader title={t.profile.movies} styles={styles} />
-      <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
-        {movies.length === 0 ? (
-          <Text style={styles.empty}>{t.profile.noMovies}</Text>
-        ) : (
-          movies
-            .slice(0, 20)
-            .map((m) => (
-              <View key={m.id} style={styles.movieCardWrap}>
-                <MovieCard
-                  id={m.id}
-                  title={m.title}
-                  year={m.year}
-                  posterPath={m.poster_path}
-                  watchedAt={m.watched_at ?? m.created_at}
-                  timesWatched={m.times_watched}
-                  onUnwatched={handleMovieUnwatched}
-                  onRewatched={handleMovieRewatched}
-                />
-              </View>
-            ))
-        )}
-      </ScrollView>
-
-      <SectionHeader title={t.profile.paused} styles={styles} />
+      <SectionHeader title={t.profile.paused} count={pausedShows.length} styles={styles} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
         {pausedShows.length === 0 ? (
           <Text style={styles.empty}>{t.profile.noPaused}</Text>
@@ -522,7 +504,7 @@ export default function ProfileScreen() {
         )}
       </ScrollView>
 
-      <SectionHeader title={t.profile.dropped} styles={styles} />
+      <SectionHeader title={t.profile.dropped} count={droppedShows.length} styles={styles} />
       <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.showsRow}>
         {droppedShows.length === 0 ? (
           <Text style={styles.empty}>{t.profile.noDropped}</Text>
@@ -533,155 +515,21 @@ export default function ProfileScreen() {
         )}
       </ScrollView>
 
-      <SectionHeader title={t.profile.settings} styles={styles} />
-      <Pressable style={styles.importRow} onPress={handleImportTvTime} disabled={importing}>
-        <Ionicons name="cloud-upload-outline" size={20} color={colors.text} />
-        <View style={{ flex: 1 }}>
-          <Text style={styles.importRowTitle}>{t.profile.importTitle}</Text>
-          <Text style={styles.importRowSubtitle}>{t.profile.importSubtitle}</Text>
-        </View>
-        {importing ? (
-          <ActivityIndicator color={colors.black} />
-        ) : (
-          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-        )}
-      </Pressable>
-      {importing && importProgress && (
-        <View style={styles.importProgress}>
-          <Text style={styles.importProgressText}>
-            {importProgress.phase === "matching" ? t.profile.importMatching : t.profile.importImporting} —{" "}
-            {importProgress.current}/{importProgress.total}
-          </Text>
-          <Text style={styles.importProgressLabel} numberOfLines={1}>
-            {importProgress.label}
-          </Text>
-        </View>
-      )}
-
-      <View style={styles.settingRow}>
-        <Ionicons name="eye-off-outline" size={20} color={colors.text} />
-        <View style={{ flex: 1 }}>
-          <Text style={styles.importRowTitle}>{t.profile.spoilerMode}</Text>
-          <Text style={styles.importRowSubtitle}>{t.profile.spoilerModeDesc}</Text>
-        </View>
-        <Switch
-          value={spoilerMode}
-          onValueChange={setSpoilerMode}
-          trackColor={{ true: colors.accent, false: colors.pillBg }}
-          thumbColor={colors.surface}
-        />
-      </View>
-
-      <View style={styles.settingRow}>
-        <Ionicons name="language-outline" size={20} color={colors.text} />
-        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.language}</Text>
-        <LanguageSwitch language={language} setLanguage={setLanguage} colors={colors} styles={styles} />
-      </View>
-
-      <View style={styles.settingRow}>
-        <Ionicons name="contrast-outline" size={20} color={colors.text} />
-        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.theme}</Text>
-        <ThemeSwitch themeMode={themeMode} setThemeMode={setThemeMode} t={t} styles={styles} />
-      </View>
-
-      <SectionHeader title={t.profile.legal} styles={styles} />
-      <Pressable style={styles.importRow} onPress={() => router.push("/legal/terms")}>
-        <Ionicons name="document-text-outline" size={20} color={colors.text} />
-        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.termsAndConditions}</Text>
-        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-      </Pressable>
-      <Pressable style={styles.importRow} onPress={() => router.push("/legal/privacy")}>
-        <Ionicons name="shield-checkmark-outline" size={20} color={colors.text} />
-        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.privacyPolicy}</Text>
-        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-      </Pressable>
-      <Pressable style={styles.importRow} onPress={() => Linking.openURL("mailto:clervie@bluedays.com")}>
-        <Ionicons name="mail-outline" size={20} color={colors.text} />
-        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.contactUs}</Text>
-        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-      </Pressable>
-
-      <SectionHeader title={t.profile.account} styles={styles} />
-      {profile?.is_admin && (
-        <Pressable style={styles.importRow} onPress={() => router.push("/admin")}>
-          <View>
-            <Ionicons name="shield-outline" size={20} color={colors.accent} />
-            {openReportCount > 0 && <View style={styles.adminBadge} />}
-          </View>
-          <Text style={[styles.importRowTitle, { flex: 1, color: colors.accent }]}>{t.profile.admin}</Text>
-          {openReportCount > 0 && (
-            <View style={styles.adminCountPill}>
-              <Text style={styles.adminCountPillText}>{openReportCount}</Text>
-            </View>
-          )}
-          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-        </Pressable>
-      )}
-      <Pressable style={styles.importRow} onPress={() => setChangePasswordOpen(true)}>
-        <Ionicons name="key-outline" size={20} color={colors.text} />
-        <Text style={[styles.importRowTitle, { flex: 1 }]}>{t.profile.changePassword}</Text>
-        <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-      </Pressable>
-      <Pressable style={styles.importRow} onPress={handleDownloadData} disabled={exportingData}>
-        <Ionicons name="download-outline" size={20} color={colors.text} />
-        <View style={{ flex: 1 }}>
-          <Text style={styles.importRowTitle}>{t.profile.downloadMyData}</Text>
-          <Text style={styles.importRowSubtitle}>{t.profile.downloadMyDataDesc}</Text>
-        </View>
-        {exportingData ? (
-          <ActivityIndicator color={colors.black} />
-        ) : (
-          <Ionicons name="chevron-forward" size={18} color={colors.textFaint} />
-        )}
-      </Pressable>
-      <Pressable style={styles.importRow} onPress={handleDeleteAccount} disabled={deletingAccount}>
-        <Ionicons name="trash-outline" size={20} color={colors.red} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.importRowTitle, { color: colors.red }]}>{t.profile.deleteAccount}</Text>
-          <Text style={styles.importRowSubtitle}>{t.profile.deleteAccountDesc}</Text>
-        </View>
-        {deletingAccount && <ActivityIndicator color={colors.red} />}
-      </Pressable>
-
-      <Pressable style={styles.signOut} onPress={() => supabase.auth.signOut()}>
-        <Text style={styles.signOutText}>{t.profile.signOut}</Text>
-      </Pressable>
-
-      <Sheet visible={changePasswordOpen} onClose={() => setChangePasswordOpen(false)}>
-        <Text style={styles.sectionTitle}>{t.profile.changePassword}</Text>
-        <TextInput
-          style={styles.newListInput}
-          placeholder={t.profile.newPassword}
-          placeholderTextColor={colors.textFaint}
-          secureTextEntry
-          value={newPassword}
-          onChangeText={setNewPassword}
-        />
-        {passwordError && <Text style={{ color: colors.red, marginBottom: 8 }}>{passwordError}</Text>}
-        <Pressable
-          style={styles.modalSubmitBtn}
-          onPress={handleChangePassword}
-          disabled={changingPassword}
-          accessibilityRole="button"
-          accessibilityLabel={t.profile.changePasswordConfirm}
-        >
-          {changingPassword ? (
-            <ActivityIndicator color={colors.onAccent} />
-          ) : (
-            <Text style={styles.modalSubmitBtnText}>{t.profile.changePasswordConfirm}</Text>
-          )}
-        </Pressable>
-      </Sheet>
     </ScrollView>
   );
 }
 
 type ProfileStyles = ReturnType<typeof createStyles>;
 
-function SectionHeader({ title, styles }: { title: string; styles: ProfileStyles }) {
+function SectionHeader({ title, count, styles }: { title: string; count?: number; styles: ProfileStyles }) {
   return (
     <View style={styles.sectionHeader}>
       <Text style={styles.sectionTitle}>{title}</Text>
+      {count !== undefined && count > 0 && (
+        <View style={styles.sectionCountPill}>
+          <Text style={styles.sectionCountText}>{count}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -691,6 +539,7 @@ function SectionHeader({ title, styles }: { title: string; styles: ProfileStyles
 // less vertical space.
 function StatCard({
   icon,
+  color,
   label,
   value,
   colors,
@@ -698,6 +547,7 @@ function StatCard({
   onPress,
 }: {
   icon: keyof typeof Ionicons.glyphMap;
+  color: string;
   label: string;
   value: string;
   colors: Colors;
@@ -707,8 +557,8 @@ function StatCard({
   const Wrapper = onPress ? Pressable : View;
   return (
     <Wrapper style={styles.statCard} onPress={onPress}>
-      <View style={styles.statCardIcon}>
-        <Ionicons name={icon} size={16} color={colors.accent} />
+      <View style={[styles.statCardIcon, { backgroundColor: `${color}22` }]}>
+        <Ionicons name={icon} size={16} color={color} />
       </View>
       <Text style={styles.statCardLabel}>{label}</Text>
       <Text style={styles.statCardValue}>{value}</Text>
@@ -717,58 +567,10 @@ function StatCard({
   );
 }
 
-function LanguageSwitch({
-  language,
-  setLanguage,
-  colors,
-  styles,
-}: {
-  language: Language;
-  setLanguage: (lang: Language) => void;
-  colors: Colors;
-  styles: ProfileStyles;
-}) {
-  return (
-    <View style={styles.languageSwitch}>
-      {(["en", "fr"] as const).map((lang) => (
-        <Pill key={lang} size="sm" tone={language === lang ? "solid" : "neutral"} onPress={() => setLanguage(lang)}>
-          {lang.toUpperCase()}
-        </Pill>
-      ))}
-    </View>
-  );
-}
-
-function ThemeSwitch({
-  themeMode,
-  setThemeMode,
-  t,
-  styles,
-}: {
-  themeMode: ThemeMode;
-  setThemeMode: (mode: ThemeMode) => void;
-  t: Translations;
-  styles: ProfileStyles;
-}) {
-  const options: { mode: ThemeMode; label: string }[] = [
-    { mode: "light", label: t.profile.themeLight },
-    { mode: "dark", label: t.profile.themeDark },
-    { mode: "system", label: t.profile.themeSystem },
-  ];
-  return (
-    <View style={styles.languageSwitch}>
-      {options.map(({ mode, label }) => (
-        <Pill key={mode} size="sm" tone={themeMode === mode ? "solid" : "neutral"} onPress={() => setThemeMode(mode)}>
-          {label}
-        </Pill>
-      ))}
-    </View>
-  );
-}
-
 function createStyles(colors: Colors) {
   return StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  headerGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 160, pointerEvents: "none" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -777,6 +579,19 @@ function createStyles(colors: Colors) {
     paddingTop: 24,
   },
   headerInfo: { flex: 1 },
+  avatarEditBadge: {
+    position: "absolute",
+    bottom: -2,
+    right: -2,
+    width: 22,
+    height: 22,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accent,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 2,
+    borderColor: colors.background,
+  },
   username: { fontSize: 20, fontWeight: "800", color: colors.text },
   userEmail: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
   bellBtn: { width: 36, height: 36, alignItems: "center", justifyContent: "center" },
@@ -821,11 +636,63 @@ function createStyles(colors: Colors) {
   followNumber: { fontSize: type.title, fontWeight: "800", color: colors.text },
   followLabel: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   sectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
     paddingHorizontal: 16,
     paddingTop: 24,
     paddingBottom: 12,
   },
   sectionTitle: { fontSize: type.subtitle, fontWeight: "800", color: colors.text },
+  sectionCountPill: {
+    backgroundColor: colors.pillBg,
+    borderRadius: radius.pill,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  sectionCountText: { fontSize: type.micro, fontWeight: "800", color: colors.textMuted },
+  recapBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 20,
+    padding: 14,
+    borderRadius: radius.lg,
+    backgroundColor: colors.accent,
+  },
+  recapBannerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  recapBannerTitle: { color: colors.onAccent, fontWeight: "800", fontSize: 14 },
+  recapBannerSubtitle: { color: colors.onAccent, opacity: 0.85, fontSize: 12, marginTop: 2 },
+  streakBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    padding: 14,
+    borderRadius: radius.lg,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  streakBannerIcon: {
+    width: 36,
+    height: 36,
+    borderRadius: radius.pill,
+    backgroundColor: colors.accentSoft,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  streakBannerTitle: { color: colors.text, fontWeight: "800", fontSize: 14 },
+  streakBannerSubtitle: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
   statsRow: { paddingHorizontal: 16, gap: 10 },
   statCard: {
     width: 140,

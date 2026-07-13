@@ -12,6 +12,7 @@ import {
 } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { getShowEpisodes, TVMazeEpisode } from "../../lib/tvmaze";
 import {
   fetchUserShows,
@@ -23,10 +24,18 @@ import {
   UserShow,
   WatchedEpisode,
 } from "../../lib/userShows";
-import { getCachedEpisodes, getCachedWatchedEpisodes } from "../../lib/showDataCache";
+import {
+  getCachedEpisodes,
+  getCachedWatchedEpisodes,
+} from "../../lib/showDataCache";
 import { fetchTmdbOnlyShows, TmdbOnlyShow } from "../../lib/tmdbOnlyShows";
 import { posterUrl } from "../../lib/tmdb";
-import { loadWatchingSnapshot, saveWatchingSnapshot, toSnapshotShow, fromSnapshotShow } from "../../lib/watchingSnapshot";
+import {
+  loadWatchingSnapshot,
+  saveWatchingSnapshot,
+  toSnapshotShow,
+  fromSnapshotShow,
+} from "../../lib/watchingSnapshot";
 import { prefetchLibrary } from "../../lib/backgroundPrefetch";
 import { mapWithConcurrency } from "../../lib/concurrency";
 import {
@@ -46,6 +55,8 @@ import { useLanguage } from "../../lib/i18n";
 import { useGrowIn, useFadeIn } from "../../lib/animations";
 import { useAuth } from "../../context/AuthContext";
 import { useScrollToTopOnTabPress } from "../../lib/useScrollToTopOnTabPress";
+import { computeStreakData, loadLocalStreakData } from "../../lib/streaks";
+import { useBadgeUnlockToast } from "../../context/BadgeUnlockContext";
 
 type ViewTab = "list" | "upcoming";
 
@@ -78,7 +89,10 @@ type EnrichedShowResult =
 // haventStarted useMemo so it can be called only for shows that actually
 // changed (see enrichedCacheRef), rather than for every tracked show on
 // every recompute.
-function computeEnrichedForShow(t: TrackedShow, now: number): EnrichedShowResult {
+function computeEnrichedForShow(
+  t: TrackedShow,
+  now: number,
+): EnrichedShowResult {
   const { show, episodes, watchedIds, watchedList } = t;
   const aired = episodes.filter((e) => new Date(e.airstamp).getTime() <= now);
   const nextEpisode = [...aired]
@@ -91,13 +105,20 @@ function computeEnrichedForShow(t: TrackedShow, now: number): EnrichedShowResult
   if (watchedList.length === 0) {
     return {
       kind: "notStarted",
-      item: { show, episode: nextEpisode, watched: false, totalEpisodes: episodes.length },
+      item: {
+        show,
+        episode: nextEpisode,
+        watched: false,
+        totalEpisodes: episodes.length,
+      },
     };
   }
 
   const lastAired = aired.reduce<TVMazeEpisode | null>((latest, e) => {
     if (!latest) return e;
-    return new Date(e.airstamp).getTime() > new Date(latest.airstamp).getTime() ? e : latest;
+    return new Date(e.airstamp).getTime() > new Date(latest.airstamp).getTime()
+      ? e
+      : latest;
   }, null);
   const isLastEpisode = lastAired?.id === nextEpisode.id;
   const isNew = isLastEpisode && diffDaysFromToday(nextEpisode.airstamp) >= -6;
@@ -113,7 +134,9 @@ function computeEnrichedForShow(t: TrackedShow, now: number): EnrichedShowResult
       show,
       episode: nextEpisode,
       watched: false,
-      watchedAt: lastWatchedAt ? new Date(lastWatchedAt).toISOString() : undefined,
+      watchedAt: lastWatchedAt
+        ? new Date(lastWatchedAt).toISOString()
+        : undefined,
       isNew,
       extraEpisodes: extraEpisodes > 0 ? extraEpisodes : undefined,
     },
@@ -125,7 +148,10 @@ function computeEnrichedForShow(t: TrackedShow, now: number): EnrichedShowResult
 // actually affect what a row renders, so a freshly recomputed result that
 // happens to describe the exact same thing as before can still reuse the
 // old object reference.
-function sameEnrichedResult(a: EnrichedShowResult, b: EnrichedShowResult): boolean {
+function sameEnrichedResult(
+  a: EnrichedShowResult,
+  b: EnrichedShowResult,
+): boolean {
   if (a.kind !== b.kind) return false;
   if (a.kind === "none") return true;
   const bi = (b as typeof a).item;
@@ -227,7 +253,12 @@ const UpcomingEpisodeRow = memo(function UpcomingEpisodeRow({
   const isFarFuture = isFuture && daysOut >= 7;
 
   return (
-    <View style={[styles.upcomingRowWrap, variant === "groupChild" && styles.groupChildWrap]}>
+    <View
+      style={[
+        styles.upcomingRowWrap,
+        variant === "groupChild" && styles.groupChildWrap,
+      ]}
+    >
       <EpisodeRow
         showId={item.show.tvmaze_id}
         showName={item.show.show_name}
@@ -238,16 +269,35 @@ const UpcomingEpisodeRow = memo(function UpcomingEpisodeRow({
         title={item.episode.name}
         watched={item.watched}
         isNew={variant === "episode" ? isFuture && !isFarFuture : undefined}
-        isPremiere={variant !== "groupChild" ? item.episode.number === 1 : undefined}
+        isPremiere={
+          variant !== "groupChild" ? item.episode.number === 1 : undefined
+        }
         hasAired={!isFuture}
         extraEpisodes={variant === "group" ? extraCount : undefined}
-        time={variant !== "group" && isFuture && !isFarFuture ? formatTime(item.episode.airstamp) : undefined}
+        time={
+          // Not gated on variant !== "group" — a collapsed group whose first
+          // episode hasn't aired yet (e.g. a premiere airing alongside later
+          // episodes the same day) must show its airtime like any other
+          // upcoming row. Without this, EpisodeRow had no time/daysAway to
+          // key off and fell through to its checkmark column instead,
+          // showing an unwatched-episode checkbox on something that hasn't
+          // even aired yet.
+          isFuture && !isFarFuture ? formatTime(item.episode.airstamp) : undefined
+        }
         daysAway={isFarFuture ? daysOut : undefined}
-        expandIcon={variant === "group" ? (expanded ? "up" : "down") : undefined}
+        expandIcon={
+          variant === "group" ? (expanded ? "up" : "down") : undefined
+        }
         timesWatched={item.timesWatched}
         onToggleWatched={() => onToggleWatched(item)}
-        onRewatch={variant !== "group" && onRewatch ? () => onRewatch(item) : undefined}
-        onPress={variant === "group" && onToggleGroup && groupKey ? () => onToggleGroup(groupKey) : undefined}
+        onRewatch={
+          variant !== "group" && onRewatch ? () => onRewatch(item) : undefined
+        }
+        onPress={
+          variant === "group" && onToggleGroup && groupKey
+            ? () => onToggleGroup(groupKey)
+            : undefined
+        }
       />
     </View>
   );
@@ -283,6 +333,8 @@ const HISTORY_PAGE_SIZE = 20;
 // (older) page of history — the natural "pull up for more" gesture instead
 // of a tap button, without ever holding the full history in memory at once.
 const HISTORY_LOAD_THRESHOLD = 40;
+// Minimum gap between two history loads — see lastHistoryLoadAt below.
+const HISTORY_LOAD_COOLDOWN_MS = 700;
 
 // Upcoming only preloads a week of past episodes; scrolling further up
 // reveals more, the same "lazy load on swipe up" gesture as Watch List's
@@ -297,9 +349,13 @@ const UPCOMING_LOAD_THRESHOLD = 40;
 // Fixed row heights so scroll offsets can be computed exactly (via getItemLayout)
 // instead of waiting on onLayout/measurement, which was never reliably ready
 // in time once the list had more than a handful of rows.
-const HEADER_HEIGHT = 56;
+const HEADER_HEIGHT = 45;
 const EMPTY_ROW_HEIGHT = 40;
-const EPISODE_ROW_HEIGHT = 125;
+// Badges (PREMIERE/NEW/AIRED) now render inline on the code line (see
+// EpisodeRow's positionRow) instead of a separate row below the title, so
+// every card is a fixed 3-line shape regardless of whether a badge shows —
+// back down from the 132 used when the badge line's height was conditional.
+const EPISODE_ROW_HEIGHT = 100;
 
 function upcomingRowHeight(row: UpcomingRow) {
   if (row.type === "header") return HEADER_HEIGHT;
@@ -308,7 +364,11 @@ function upcomingRowHeight(row: UpcomingRow) {
 }
 
 function watchListRowHeight(row: WatchListRow) {
-  if (row.type === "historyHeader" || row.type === "watchNextHeader" || row.type === "notStartedHeader") {
+  if (
+    row.type === "historyHeader" ||
+    row.type === "watchNextHeader" ||
+    row.type === "notStartedHeader"
+  ) {
     return HEADER_HEIGHT;
   }
   if (row.type === "watchNextEmpty") return EMPTY_ROW_HEIGHT;
@@ -329,13 +389,34 @@ export default function ShowsScreen() {
   const [hasMoreHistory, setHasMoreHistory] = useState(true);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
-  const [upcomingPastDays, setUpcomingPastDays] = useState(UPCOMING_INITIAL_PAST_DAYS);
+  const [upcomingPastDays, setUpcomingPastDays] = useState(
+    UPCOMING_INITIAL_PAST_DAYS,
+  );
   const [tmdbOnlyShows, setTmdbOnlyShows] = useState<TmdbOnlyShow[]>([]);
+  const [currentStreak, setCurrentStreak] = useState(0);
   const router = useRouter();
+  const announceBadges = useBadgeUnlockToast();
+
+  // Lightweight — only reads watched dates, no per-show TVmaze calls (unlike
+  // lib/showStats.ts) — fine to compute once per mount rather than folding
+  // into loadData() below. Surfaces the streak here (see the pill above the
+  // tabs row) so it reads as a small game rather than something buried in
+  // Profile, with a tap through to the full streaks/badges page.
+  useEffect(() => {
+    // Local IndexedDB read first — instant, no network round trip (see
+    // lib/streaks.ts) — then a fresh compute reconciles it in the background.
+    loadLocalStreakData().then((local) => {
+      if (local) setCurrentStreak(local.currentStreak);
+    });
+    computeStreakData(announceBadges)
+      .then((d) => setCurrentStreak(d.currentStreak))
+      .catch(() => {});
+  }, [announceBadges]);
   // Set right after marking an episode watched (never on unwatch) — opens
   // the quick feeling picker for that specific episode. Tapping outside
   // (Sheet's backdrop) or picking nothing just closes it without saving.
-  const [feelingPromptItem, setFeelingPromptItem] = useState<EnrichedEpisode | null>(null);
+  const [feelingPromptItem, setFeelingPromptItem] =
+    useState<EnrichedEpisode | null>(null);
   const listRef = useRef<FlatList<WatchListRow>>(null);
   const upcomingListRef = useRef<FlatList<UpcomingRow>>(null);
   const hasLoadedOnce = useRef(false);
@@ -348,12 +429,23 @@ export default function ShowsScreen() {
   }, [tracked]);
   const watchListScrollY = useRef(0);
   const upcomingScrollY = useRef(0);
+  // Same cooldown as lastHistoryLoadAt below, same reason — without it every
+  // small settle/bounce scroll event near the top after a load finishes
+  // immediately queues another one.
+  const lastPastUpcomingLoadAt = useRef(0);
   const pendingPastLoad = useRef<number | null>(null);
   // React state updates aren't synchronous — two onScroll events dispatched
   // in the same batching window could both read loadingHistory as still
   // false and both fire a fetch for the same page. This ref closes that gap;
   // loadingHistory state stays too, purely to drive the spinner.
   const loadingHistoryRef = useRef(false);
+  // Cooldown between history loads — without it, the tiny residual bounce/
+  // settle scroll events that follow *any* touch near the top of the list
+  // (not just a real "pull up for history" gesture) each satisfy the
+  // threshold check the moment the previous load's loadingHistoryRef clears,
+  // chaining several page loads back-to-back and visibly climbing several
+  // screens into history from what felt like barely touching the list.
+  const lastHistoryLoadAt = useRef(0);
   // Per-show cache for the watchNext/haventStarted memo below, keyed by
   // tvmaze_id. computeEnrichedForShow is always called fresh (see the memo
   // below) so this never serves stale, time-dependent data (a newly-aired
@@ -394,10 +486,14 @@ export default function ShowsScreen() {
     // status that Supabase already returned successfully, and vice versa.
     const [episodesResult, watchedResult] = await Promise.allSettled([
       getCachedEpisodes(show.tvmaze_id, () => getShowEpisodes(show.tvmaze_id)),
-      getCachedWatchedEpisodes(show.tvmaze_id, () => fetchWatchedEpisodes(show.tvmaze_id)),
+      getCachedWatchedEpisodes(show.tvmaze_id, () =>
+        fetchWatchedEpisodes(show.tvmaze_id),
+      ),
     ]);
-    const episodes = episodesResult.status === "fulfilled" ? episodesResult.value : [];
-    const watchedList = watchedResult.status === "fulfilled" ? watchedResult.value : [];
+    const episodes =
+      episodesResult.status === "fulfilled" ? episodesResult.value : [];
+    const watchedList =
+      watchedResult.status === "fulfilled" ? watchedResult.value : [];
     return {
       show,
       episodes,
@@ -448,7 +544,13 @@ export default function ShowsScreen() {
     // watching first, want_to_watch after (see the `followed` order below,
     // which this gets rebuilt against once fetchUserShows resolves).
     let order = [...seed]
-      .sort((a, b) => (a.show.status === b.show.status ? 0 : a.show.status === "watching" ? -1 : 1))
+      .sort((a, b) =>
+        a.show.status === b.show.status
+          ? 0
+          : a.show.status === "watching"
+            ? -1
+            : 1,
+      )
       .map((t) => t.show.tvmaze_id);
     function currentList() {
       return order
@@ -548,10 +650,15 @@ export default function ShowsScreen() {
       // 200+ re-renders. Seed data for shows still awaiting their fresh
       // fetch stays visible until it's overwritten the moment that fetch
       // lands.
-      await mapWithConcurrency(followed, TRACKED_SHOW_FETCH_CONCURRENCY, fetchTrackedShow, (result) => {
-        byId.set(result.show.tvmaze_id, result);
-        scheduleFlush();
-      });
+      await mapWithConcurrency(
+        followed,
+        TRACKED_SHOW_FETCH_CONCURRENCY,
+        fetchTrackedShow,
+        (result) => {
+          byId.set(result.show.tvmaze_id, result);
+          scheduleFlush();
+        },
+      );
       // Final flush covers both the trailing rAF-coalesced items and the
       // followed.length === 0 case, where onItemDone never fires at all.
       flush();
@@ -617,10 +724,16 @@ export default function ShowsScreen() {
 
   async function loadMoreHistory() {
     if (loadingHistoryRef.current || !hasMoreHistory) return;
+    if (Date.now() - lastHistoryLoadAt.current < HISTORY_LOAD_COOLDOWN_MS)
+      return;
+    lastHistoryLoadAt.current = Date.now();
     loadingHistoryRef.current = true;
     setLoadingHistory(true);
     try {
-      const page = await fetchWatchedEpisodesPage(historyOffset, HISTORY_PAGE_SIZE);
+      const page = await fetchWatchedEpisodesPage(
+        historyOffset,
+        HISTORY_PAGE_SIZE,
+      );
       if (page.length < HISTORY_PAGE_SIZE) setHasMoreHistory(false);
 
       const enriched: EnrichedEpisode[] = [];
@@ -643,7 +756,8 @@ export default function ShowsScreen() {
       // so the view stays put and the newly loaded page sits above, ready to
       // be revealed by scrolling up again — i.e. it "starts from the bottom".
       const addedHeaderHeight = historyItems.length === 0 ? HEADER_HEIGHT : 0;
-      const addedHeight = addedHeaderHeight + enriched.length * EPISODE_ROW_HEIGHT;
+      const addedHeight =
+        addedHeaderHeight + enriched.length * EPISODE_ROW_HEIGHT;
 
       setHistoryItems((prev) => [...enriched, ...prev]);
       setHistoryOffset((prev) => prev + page.length);
@@ -670,7 +784,8 @@ export default function ShowsScreen() {
     // otherwise (e.g. just a couple of shows, nothing to scroll) the offset
     // sits at 0 permanently and any touch/bounce would spuriously trigger
     // a history load and jump the page around.
-    const isScrollable = contentSize.height > layoutMeasurement.height + HISTORY_LOAD_THRESHOLD;
+    const isScrollable =
+      contentSize.height > layoutMeasurement.height + HISTORY_LOAD_THRESHOLD;
     // Direction matters, not just position: starting a scroll from the very
     // top and swiping down the page (offset climbing away from 0) passes
     // through this same threshold zone as actually pulling up toward the
@@ -683,12 +798,17 @@ export default function ShowsScreen() {
 
   function loadMorePastUpcoming() {
     if (upcomingPastDays >= UPCOMING_MAX_PAST_DAYS) return;
+    if (Date.now() - lastPastUpcomingLoadAt.current < HISTORY_LOAD_COOLDOWN_MS)
+      return;
+    lastPastUpcomingLoadAt.current = Date.now();
     // Record today's current pixel offset before the window widens — once
     // more past rows are prepended, today's row shifts down by however much
     // content was just added, and we scroll by exactly that much to keep the
     // viewport visually anchored (same trick as loadMoreHistory above).
     pendingPastLoad.current = upcomingOffsets[todayHeaderIndex] ?? 0;
-    setUpcomingPastDays((d) => Math.min(d + UPCOMING_PAST_STEP_DAYS, UPCOMING_MAX_PAST_DAYS));
+    setUpcomingPastDays((d) =>
+      Math.min(d + UPCOMING_PAST_STEP_DAYS, UPCOMING_MAX_PAST_DAYS),
+    );
   }
 
   function onUpcomingScroll(e: NativeSyntheticEvent<NativeScrollEvent>) {
@@ -697,7 +817,8 @@ export default function ShowsScreen() {
     const newY = contentOffset.y;
     upcomingScrollY.current = newY;
 
-    const isScrollable = contentSize.height > layoutMeasurement.height + UPCOMING_LOAD_THRESHOLD;
+    const isScrollable =
+      contentSize.height > layoutMeasurement.height + UPCOMING_LOAD_THRESHOLD;
     const isMovingTowardTop = newY <= previousY;
     if (isScrollable && isMovingTowardTop && newY <= UPCOMING_LOAD_THRESHOLD) {
       loadMorePastUpcoming();
@@ -782,7 +903,9 @@ export default function ShowsScreen() {
     const cache = upcomingCacheRef.current;
     const nextCache = new Map<number, EnrichedEpisode>();
     for (const { show, episodes, watchedIds, watchedList } of tracked) {
-      const timesByEpisode = new Map(watchedList.map((w) => [w.tvmaze_episode_id, w.times_watched]));
+      const timesByEpisode = new Map(
+        watchedList.map((w) => [w.tvmaze_episode_id, w.times_watched]),
+      );
       for (const ep of episodes) {
         // Rendering every past episode a long-running show ever aired (hundreds
         // of rows) is unnecessary noise — only the current past window is
@@ -862,13 +985,15 @@ export default function ShowsScreen() {
             : {
                 ...t,
                 watchedList: t.watchedList.map((w) =>
-                  w.tvmaze_episode_id === item.episode.id ? { ...w, feeling: feelingKey } : w
+                  w.tvmaze_episode_id === item.episode.id
+                    ? { ...w, feeling: feelingKey }
+                    : w,
                 ),
-              }
-        )
+              },
+        ),
       );
     },
-    [feelingPromptItem]
+    [feelingPromptItem],
   );
 
   const rewatchEpisode = useCallback(async (item: EnrichedEpisode) => {
@@ -881,13 +1006,17 @@ export default function ShowsScreen() {
           : {
               ...t,
               watchedList: t.watchedList.map((w) =>
-                w.tvmaze_episode_id === item.episode.id ? result : w
+                w.tvmaze_episode_id === item.episode.id ? result : w,
               ),
-            }
-      )
+            },
+      ),
     );
     setHistoryItems((prev) =>
-      prev.map((h) => (h.episode.id === item.episode.id ? { ...h, timesWatched: result.times_watched } : h))
+      prev.map((h) =>
+        h.episode.id === item.episode.id
+          ? { ...h, timesWatched: result.times_watched }
+          : h,
+      ),
     );
   }, []);
 
@@ -914,7 +1043,8 @@ export default function ShowsScreen() {
     }
     if (haventStarted.length > 0) {
       rows.push({ type: "notStartedHeader" });
-      for (const item of haventStarted) rows.push({ type: "notStartedItem", item });
+      for (const item of haventStarted)
+        rows.push({ type: "notStartedItem", item });
     }
 
     const offsets: number[] = [];
@@ -980,7 +1110,12 @@ export default function ShowsScreen() {
           // during that window correctly asks "rewatch or unwatch" instead of
           // silently doing nothing.
           return (
-            <WatchListEpisodeRow item={row.item} onToggleWatched={toggleWatched} onRewatch={rewatchEpisode} styles={styles} />
+            <WatchListEpisodeRow
+              item={row.item}
+              onToggleWatched={toggleWatched}
+              onRewatch={rewatchEpisode}
+              styles={styles}
+            />
           );
         case "notStartedHeader":
           return (
@@ -989,7 +1124,13 @@ export default function ShowsScreen() {
             </View>
           );
         case "notStartedItem":
-          return <WatchListEpisodeRow item={row.item} onToggleWatched={toggleWatched} styles={styles} />;
+          return (
+            <WatchListEpisodeRow
+              item={row.item}
+              onToggleWatched={toggleWatched}
+              styles={styles}
+            />
+          );
       }
     },
     [styles, t, toggleWatched, rewatchEpisode],
@@ -1038,7 +1179,11 @@ export default function ShowsScreen() {
         flatData.push({
           type: "header",
           key: dayKey,
-          label: upcomingGroupLabel(dayKey, items[0]?.episode.airstamp ?? dayKey, language),
+          label: upcomingGroupLabel(
+            dayKey,
+            items[0]?.episode.airstamp ?? dayKey,
+            language,
+          ),
         });
         if (items.length === 0) {
           flatData.push({ type: "empty" });
@@ -1155,22 +1300,47 @@ export default function ShowsScreen() {
         />
       );
     },
-    [expandedGroups, toggleWatched, toggleGroup, rewatchEpisode, styles, colors, t]
+    [
+      expandedGroups,
+      toggleWatched,
+      toggleGroup,
+      rewatchEpisode,
+      styles,
+      colors,
+      t,
+    ],
   );
 
   return (
     <View style={styles.container}>
+      <LinearGradient colors={[`${colors.accent}1f`, "transparent"]} style={styles.headerGlow} />
+      {currentStreak > 0 && (
+        <Pressable
+          style={styles.streakPill}
+          onPress={() => router.push("/streaks")}
+        >
+          <Ionicons name="flame" size={14} color="#ff9f43" />
+          <Text style={styles.streakPillText}>
+            {t.shows.streakDays(currentStreak)}
+          </Text>
+          <Ionicons name="chevron-forward" size={12} color={colors.textFaint} />
+        </Pressable>
+      )}
       <View style={styles.tabsRow}>
         <Pressable style={styles.tabBtn} onPress={goToWatchList}>
           <Text
-            style={[
-              styles.tabText,
-              tab === "list" && styles.tabTextActive,
-            ]}
+            style={[styles.tabText, tab === "list" && styles.tabTextActive]}
           >
             {t.shows.tabList}
           </Text>
-          {tab === "list" && <Animated.View style={[styles.tabUnderline, { transform: [{ scaleX: underlineGrow }] }]} />}
+          {tab === "list" && (
+            <Animated.View
+              style={[
+                styles.tabUnderline,
+                { transform: [{ scaleX: underlineGrow }] },
+              ]}
+            />
+          )}
         </Pressable>
         <Pressable style={styles.tabBtn} onPress={goToUpcoming}>
           <Text
@@ -1178,7 +1348,14 @@ export default function ShowsScreen() {
           >
             {t.shows.tabUpcoming}
           </Text>
-          {tab === "upcoming" && <Animated.View style={[styles.tabUnderline, { transform: [{ scaleX: underlineGrow }] }]} />}
+          {tab === "upcoming" && (
+            <Animated.View
+              style={[
+                styles.tabUnderline,
+                { transform: [{ scaleX: underlineGrow }] },
+              ]}
+            />
+          )}
         </Pressable>
       </View>
 
@@ -1204,7 +1381,9 @@ export default function ShowsScreen() {
             ListFooterComponent={
               tmdbOnlyShows.length > 0 ? (
                 <View style={styles.tmdbOnlySection}>
-                  <Text style={styles.tmdbOnlySectionTitle}>{t.shows.tmdbOnlyTitle}</Text>
+                  <Text style={styles.tmdbOnlySectionTitle}>
+                    {t.shows.tmdbOnlyTitle}
+                  </Text>
                   <View style={styles.tmdbOnlyRow}>
                     {tmdbOnlyShows.map((s) => (
                       <Pressable
@@ -1214,13 +1393,24 @@ export default function ShowsScreen() {
                       >
                         {s.poster_path ? (
                           <Animated.Image
-                            source={{ uri: posterUrl(s.poster_path, "w200") ?? undefined }}
+                            source={{
+                              uri:
+                                posterUrl(s.poster_path, "w200") ?? undefined,
+                            }}
                             style={styles.tmdbOnlyPoster}
                           />
                         ) : (
-                          <View style={[styles.tmdbOnlyPoster, styles.tmdbOnlyPosterFallback]} />
+                          <View
+                            style={[
+                              styles.tmdbOnlyPoster,
+                              styles.tmdbOnlyPosterFallback,
+                            ]}
+                          />
                         )}
-                        <Text style={styles.tmdbOnlyCardTitle} numberOfLines={2}>
+                        <Text
+                          style={styles.tmdbOnlyCardTitle}
+                          numberOfLines={2}
+                        >
                           {s.title}
                         </Text>
                       </Pressable>
@@ -1231,7 +1421,9 @@ export default function ShowsScreen() {
             }
           />
           {loadingHistory && (
-            <View style={styles.historyLoadingOverlay} pointerEvents="none">
+            <View
+              style={[styles.historyLoadingOverlay, { pointerEvents: "none" }]}
+            >
               <ActivityIndicator color={colors.textFaint} size="small" />
             </View>
           )}
@@ -1289,83 +1481,117 @@ export default function ShowsScreen() {
 
 function createStyles(colors: Colors) {
   return StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  tabsRow: {
-    flexDirection: "row",
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  tabBtn: { flex: 1, alignItems: "center", paddingVertical: 14 },
-  tabText: {
-    fontWeight: "800",
-    fontSize: 13,
-    color: colors.textFaint,
-    letterSpacing: 0.4,
-  },
-  tabTextActive: { color: colors.accent },
-  tabUnderline: {
-    height: 2,
-    backgroundColor: colors.accent,
-    width: "60%",
-    marginTop: 8,
-  },
-  content: { padding: 16 },
-  tmdbOnlySection: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 24 },
-  tmdbOnlySectionTitle: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: colors.textMuted,
-    marginBottom: 12,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  tmdbOnlyRow: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
-  tmdbOnlyCard: { width: 90 },
-  tmdbOnlyPoster: { width: 90, height: 135, borderRadius: radius.md, backgroundColor: colors.pillBg },
-  tmdbOnlyPosterFallback: { alignItems: "center", justifyContent: "center" },
-  tmdbOnlyCardTitle: { fontSize: 12, color: colors.text, marginTop: 6, fontWeight: "600" },
-  groupHeaderRow: {
-    height: HEADER_HEIGHT,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  historyLoadingOverlay: {
-    position: "absolute",
-    top: 8,
-    left: 0,
-    right: 0,
-    alignItems: "center",
-  },
-  empty: {
-    color: colors.textMuted,
-    textAlign: "center",
-    height: EMPTY_ROW_HEIGHT,
-  },
-  watchListRowWrap: { height: EPISODE_ROW_HEIGHT, overflow: "hidden" },
-  upcomingRowWrap: { height: EPISODE_ROW_HEIGHT, overflow: "hidden" },
-  groupChildWrap: { paddingLeft: 20 },
-  dateHeaderRow: {
-    height: HEADER_HEIGHT,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-  },
-  dateHeaderLine: { flex: 1, height: 1, backgroundColor: colors.border },
-  dateHeaderText: {
-    fontWeight: "800",
-    fontSize: 11,
-    color: colors.textMuted,
-    letterSpacing: 0.5,
-  },
-  emptyTodayCard: {
-    height: EMPTY_ROW_HEIGHT,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-  },
-  emptyTodayText: { color: colors.textMuted, fontSize: 13 },
-  fullEmpty: { flex: 1, alignItems: "center", justifyContent: "center", gap: 10, paddingHorizontal: 40 },
+    container: { flex: 1, backgroundColor: colors.background },
+    headerGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 140, pointerEvents: "none" },
+    streakPill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      alignSelf: "center",
+      marginTop: 10,
+      marginBottom: 2,
+      paddingHorizontal: 12,
+      paddingVertical: 5,
+      borderRadius: radius.pill,
+      backgroundColor: colors.accentSoft,
+    },
+    streakPillText: { fontSize: 12, fontWeight: "800", color: colors.text },
+    tabsRow: {
+      flexDirection: "row",
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    tabBtn: { flex: 1, alignItems: "center", paddingVertical: 14 },
+    tabText: {
+      fontWeight: "800",
+      fontSize: 13,
+      color: colors.textFaint,
+      letterSpacing: 0.4,
+    },
+    tabTextActive: { color: colors.accent },
+    tabUnderline: {
+      height: 2,
+      backgroundColor: colors.accent,
+      width: "60%",
+      marginTop: 8,
+    },
+    content: { padding: 16 },
+    tmdbOnlySection: {
+      paddingHorizontal: 16,
+      paddingTop: 8,
+      paddingBottom: 24,
+    },
+    tmdbOnlySectionTitle: {
+      fontSize: 13,
+      fontWeight: "700",
+      color: colors.textMuted,
+      marginBottom: 12,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    tmdbOnlyRow: { flexDirection: "row", flexWrap: "wrap", gap: 12 },
+    tmdbOnlyCard: { width: 90 },
+    tmdbOnlyPoster: {
+      width: 90,
+      height: 135,
+      borderRadius: radius.md,
+      backgroundColor: colors.pillBg,
+    },
+    tmdbOnlyPosterFallback: { alignItems: "center", justifyContent: "center" },
+    tmdbOnlyCardTitle: {
+      fontSize: 12,
+      color: colors.text,
+      marginTop: 6,
+      fontWeight: "600",
+    },
+    groupHeaderRow: {
+      height: HEADER_HEIGHT,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    historyLoadingOverlay: {
+      position: "absolute",
+      top: 8,
+      left: 0,
+      right: 0,
+      alignItems: "center",
+    },
+    empty: {
+      color: colors.textMuted,
+      textAlign: "center",
+      height: EMPTY_ROW_HEIGHT,
+    },
+    watchListRowWrap: { height: EPISODE_ROW_HEIGHT, overflow: "hidden" },
+    upcomingRowWrap: { height: EPISODE_ROW_HEIGHT, overflow: "hidden" },
+    groupChildWrap: { paddingLeft: 20 },
+    dateHeaderRow: {
+      height: HEADER_HEIGHT,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+    },
+    dateHeaderLine: { flex: 1, height: 1, backgroundColor: colors.border },
+    dateHeaderText: {
+      fontWeight: "800",
+      fontSize: 11,
+      color: colors.textMuted,
+      letterSpacing: 0.5,
+    },
+    emptyTodayCard: {
+      height: EMPTY_ROW_HEIGHT,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+    },
+    emptyTodayText: { color: colors.textMuted, fontSize: 13 },
+    fullEmpty: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 10,
+      paddingHorizontal: 40,
+    },
   });
 }

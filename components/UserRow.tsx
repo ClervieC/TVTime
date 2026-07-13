@@ -5,17 +5,18 @@ import { Avatar } from "./Avatar";
 
 interface UserRowProps {
   username: string;
+  imageUri?: string | null;
   onPress: () => void;
   trailing?: ReactNode;
 }
 
-export function UserRow({ username, onPress, trailing }: UserRowProps) {
+export function UserRow({ username, imageUri, onPress, trailing }: UserRowProps) {
   const colors = useColors();
   const styles = createStyles(colors);
 
   return (
     <Pressable style={styles.row} onPress={onPress}>
-      <Avatar name={username} size="sm" />
+      <Avatar name={username} imageUri={imageUri} size="sm" />
       <Text style={styles.username} numberOfLines={1}>
         {username}
       </Text>

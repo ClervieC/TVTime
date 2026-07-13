@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useMemo, useState, useCallback, PropsWithChildren } from "react";
-import { useColorScheme } from "react-native";
+import { Platform, useColorScheme } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 const lightColors = {
@@ -113,6 +113,25 @@ export function useThemeMode() {
 export function useColors(): Colors {
   const { resolvedScheme } = useContext(ThemeContext);
   return resolvedScheme === "dark" ? darkColors : lightColors;
+}
+
+// react-native-web warns that the shadow* props (shadowColor/Opacity/Radius/
+// Offset) are deprecated in favor of the CSS `boxShadow` string — but plain
+// RN (native) has no boxShadow support at all and still needs shadow*/
+// elevation. This picks the right shape per platform from one call site
+// instead of scattering Platform.select across every shadowed style.
+export function dropShadow(opts: { color?: string; opacity: number; radius: number; offsetY?: number; elevation?: number }) {
+  const { color = "#000", opacity, radius: blur, offsetY = 0, elevation } = opts;
+  if (Platform.OS === "web") {
+    return { boxShadow: `0px ${offsetY}px ${blur}px rgba(0, 0, 0, ${opacity})` } as const;
+  }
+  return {
+    shadowColor: color,
+    shadowOpacity: opacity,
+    shadowRadius: blur,
+    shadowOffset: { width: 0, height: offsetY },
+    elevation: elevation ?? 1,
+  };
 }
 
 export const radius = {

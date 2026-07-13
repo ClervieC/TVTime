@@ -243,6 +243,20 @@ export const getTopRatedMovies = cachedMovieList("/movie/top_rated");
 export const getNowPlayingMovies = cachedMovieList("/movie/now_playing");
 export const getUpcomingMovies = cachedMovieList("/movie/upcoming");
 
+// "For You" (see lib/forYou.ts) — popularity-sorted discover filtered to the
+// genres the user actually watches most, rather than one more generic
+// popular/top-rated list. Cache key includes the genre list since unlike the
+// four lists above, this varies per user, not just per day.
+export function getForYouMovies(genreIds: number[]): Promise<TMDBSearchResult[]> {
+  if (genreIds.length === 0) return Promise.resolve([]);
+  return withCache(`for-you-movies:${genreIds.join(",")}`, ONE_DAY, () =>
+    get<{ results: TMDBSearchResult[] }>("/discover/movie", {
+      with_genres: genreIds.join(","),
+      sort_by: "popularity.desc",
+    }).then((d) => d.results)
+  );
+}
+
 // TVmaze and TMDB use entirely different internal ids for the same show, but
 // both link out to the same third-party TheTVDB id — TMDB exposes it via
 // /tv/{id}/external_ids, and TVmaze already has a lookup-by-tvdb-id endpoint
@@ -345,4 +359,10 @@ export function getUpcomingTv() {
     "first_air_date.gte": today,
     sort_by: "popularity.desc",
   })();
+}
+
+// "For You" (see lib/forYou.ts) — same idea as getForYouMovies above, TV side.
+export function getForYouTv(genreIds: number[]): Promise<TMDBTvResult[]> {
+  if (genreIds.length === 0) return Promise.resolve([]);
+  return cachedTvList("/discover/tv", { with_genres: genreIds.join(","), sort_by: "popularity.desc" })();
 }

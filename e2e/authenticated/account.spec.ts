@@ -1,7 +1,9 @@
 import { test, expect } from "@playwright/test";
 
+// Settings/Legal/Account moved out of Profile into their own screen behind
+// the gear icon (see app/settings.tsx) — go straight there.
 test.beforeEach(async ({ page }) => {
-  await page.goto("/profile");
+  await page.goto("/settings");
 });
 
 test("shows the Account settings section", async ({ page }) => {

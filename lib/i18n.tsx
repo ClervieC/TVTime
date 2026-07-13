@@ -1,4 +1,12 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, PropsWithChildren } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  PropsWithChildren,
+} from "react";
 import { useAuth } from "../context/AuthContext";
 import {
   fetchUserSettings,
@@ -21,6 +29,36 @@ const en = {
     buy: "Buy",
     noProviders: "No streaming info available.",
     youMightAlsoLike: "You might also like",
+    somethingWentWrong: "Something went wrong",
+    somethingWentWrongDetail:
+      "This couldn't be loaded — it may not exist anymore, or there was a network problem.",
+    backToShows: "Back to Shows",
+  },
+  onboarding: {
+    skip: "Skip",
+    next: "Next",
+    getStarted: "Get started",
+    slide1Title: "Keep every show in one place",
+    slide1Body:
+      "Watch Next always stays on top, so you always know what's up next — and streaks keep you coming back.",
+    slide2Title: "Never miss an episode",
+    slide2Body:
+      "See what's airing today and this week, sorted in order, with new episodes flagged the moment they land.",
+    slide3Title: "Discover something new",
+    slide3Body:
+      "Get picks based on what you actually watch, alongside what's popular right now.",
+    slide4Title: "Rate & react",
+    slide4Body:
+      "Rate every episode, share how it made you feel, and see what everyone else thought.",
+    slide5Title: "Track movies too",
+    slide5Body:
+      "Keep a watchlist, log what you've seen, and rate it — all in the same place as your shows.",
+    slide6Title: "Follow your friends",
+    slide6Body:
+      "See what people you follow are watching and rating, and keep up with their activity.",
+    slide7Title: "Make it yours",
+    slide7Body:
+      "Build up streaks and badges, customize your profile, and track your stats over time.",
   },
   login: {
     tagline: "Track your shows",
@@ -51,10 +89,12 @@ const en = {
   },
   activity: {
     title: "Activity",
+    subtitle: "What people you follow are watching",
     empty: "No activity yet.",
     emptyNoFollows: "Follow people to see what they're watching here.",
     findPeople: "Find people",
-    watchedEpisode: (season: number, number: number) => `watched S${season}E${number} of`,
+    watchedEpisode: (season: number, number: number) =>
+      `watched S${season}E${number} of`,
     watchedMovie: "watched",
     commentedOnShow: "commented on",
     commentedOnEpisode: "commented on an episode of",
@@ -74,8 +114,34 @@ const en = {
     notStartedEpisodesSubtitle: "Across shows on your list you haven't started",
     genreBreakdown: "Genres you watch most",
     genreShowCount: (n: number) => `${n} show${n > 1 ? "s" : ""}`,
+    showsTab: "Shows",
+    topShows: "Most binge-watched shows",
+    bingeCount: (n: number) => `${n} in a day`,
+    episodeCount: (n: number) => `${n} episode${n > 1 ? "s" : ""}`,
+    moviesSection: "Movies",
+    moviesPerMonth: "Movies per month",
+    totalMoviesWatched: "Total movies watched",
+    topMovies: "Most rewatched movies",
+    watchCount: (n: number) => `watched ${n}×`,
     noHistory: "Watch a few episodes to see your stats here.",
     computedAt: (date: string) => `Updated ${date}`,
+  },
+  recap: {
+    watchTimeLabel: "hours watched",
+    episodesLabel: "episodes",
+    moviesLabel: "movies",
+    newShowsLabel: "shows started",
+    daysActiveLabel: "days active",
+    topShowLabel: "Most watched show",
+    topGenreLabel: "Favorite genre",
+    empty: (year: number) => `Nothing watched in ${year} yet.`,
+    shareTitle: (year: number) => `My ${year} on Epify`,
+    totalWatchTime: (h: string) => `${h}h watched`,
+    episodeCount: (n: number) => `${n} episodes`,
+    movieCount: (n: number) => `${n} movies`,
+    topShowLine: (name: string) => `Most watched: ${name}`,
+    topGenreLine: (genre: string) => `Favorite genre: ${genre}`,
+    notAvailable: "Your recap opens up in the last week of December.",
   },
   shows: {
     tabList: "My list",
@@ -86,16 +152,19 @@ const en = {
     emptyToday: "Nothing planned today.",
     emptyWatchList: "Add shows to follow to see them here.",
     tmdbOnlyTitle: "Waiting to be added",
+    streakDays: (n: number) => `${n} day${n > 1 ? "s" : ""} streak`,
   },
   movies: {
     title: "Movies",
     empty: "No movies yet.",
     watchedOn: (date: string) => `Watched on ${date}`,
-    watchCount: (n: number) => (n === 1 ? "Watched once" : `Watched ${n} times`),
+    watchCount: (n: number) =>
+      n === 1 ? "Watched once" : `Watched ${n} times`,
     overview: "Overview",
     tabList: "My list",
     tabUpcoming: "Upcoming",
-    emptyUpcoming: "Your watchlist is empty — add movies from Explore or a movie's page.",
+    emptyUpcoming:
+      "Your watchlist is empty — add movies from Explore or a movie's page.",
     emptyWatchlist: "Add movies to your watchlist to see them here.",
     releasesOn: (date: string) => `Releases ${date}`,
     addToWatchlist: "Add to watchlist",
@@ -115,6 +184,7 @@ const en = {
     categoryKdrama: "K-Drama",
     categorySciFi: "Sci-Fi",
     categoryNew: "New releases",
+    categoryForYou: "For you",
     categoryPopularMovies: "Popular",
     categoryTopRatedMovies: "Top rated",
     categoryNowPlayingMovies: "In theaters",
@@ -123,12 +193,43 @@ const en = {
     resultsShows: "Shows",
     resultsMovies: "Movies",
     noMatchTitle: "Show not found",
-    noMatchDesc: "This show isn't available on TVmaze, which the app uses to track episodes.",
+    noMatchDesc:
+      "This show isn't available on TVmaze, which the app uses to track episodes.",
   },
   profile: {
+    recapTitle: (year: number) => `Your ${year} recap`,
+    recapSubtitle: "See your year in shows and movies",
+    changePhoto: "Change photo",
+    changePhotoFailed: "Couldn't update your photo. Try again.",
+    streaksTitle: "Streaks & badges",
+    streakBannerActive: (n: number) => `${n}-day streak — keep it going`,
+    streakBannerInactive: "Watch something today to start a streak",
+    currentStreak: "Day streak",
+    longestStreak: "Best streak",
+    badgeCategoryEpisodes: "Episodes watched",
+    badgeCategoryMovies: "Movies watched",
+    badgeCategoryShows: "Shows completed",
+    badgeCategoryStreak: "Watch streaks",
+    badgeCategoryRatings: "Ratings given",
+    badgeCategorySocial: "People followed",
+    badgeCategoryRewatch: "Rewatches",
+    badgeEpisodes: (n: number) => `${n} episodes`,
+    badgeMovies: (n: number) => `${n} movies`,
+    badgeShows: (n: number) => `${n} show${n > 1 ? "s" : ""} done`,
+    badgeStreak: (n: number) => `${n}-day streak`,
+    badgeRatings: (n: number) => `${n} rating${n > 1 ? "s" : ""}`,
+    badgeSocial: (n: number) => `${n} followed`,
+    badgeRewatch: (n: number) => `${n} rewatch${n > 1 ? "es" : ""}`,
+    badgeProgress: (n: number, threshold: number) => `${n}/${threshold}`,
+    badgeCollected: (n: number, total: number) => `${n} of ${total} badges collected`,
+    badgeEarnedOn: (date: string) => `Earned on ${date}`,
+    badgeRemaining: (n: number) => (n === 1 ? "1 more to unlock" : `${n} more to unlock`),
+    badgeUnlockedTitle: "Badge unlocked",
     statistics: "Statistics",
-    favorites: "Favorites",
+    favorites: "Favorites shows",
     favoriteEpisodes: "Favorite episodes",
+    favoriteMovies: "Favorite movies",
+    noFavoriteMovies: "No favorite movies yet.",
     lists: "Lists",
     shows: "Shows",
     dropped: "Stopped",
@@ -153,7 +254,8 @@ const en = {
     createList: "Create a list",
     newListPlaceholder: "List name",
     importTitle: "Import from TV Time",
-    importSubtitle: "Load your CSV or JSON export retrieved from TV Time (by Refract) to get your history back.",
+    importSubtitle:
+      "Load your CSV or JSON export retrieved from TV Time (by Refract) to get your history back.",
     importInvalidFileTitle: "Invalid file",
     importInvalidFileMsg: "Choose a CSV or JSON export from TV Time.",
     importMatching: "Matching shows",
@@ -161,12 +263,14 @@ const en = {
     importDoneTitle: "Import complete",
     importDone: (shows: number, episodes: number, movies: number) =>
       `${shows} show(s) imported, ${episodes} episode(s) marked as watched, ${movies} movie(s) imported.`,
-    importUnmatched: (n: number, names: string) => `\n${n} show(s) not found on TVmaze: ${names}`,
+    importUnmatched: (n: number, names: string) =>
+      `\n${n} show(s) not found on TVmaze: ${names}`,
     importFailedTitle: "Import failed",
     importFailedUnknown: "Unknown error.",
     importReadError: "Couldn't read the selected file.",
     spoilerMode: "Spoiler mode",
-    spoilerModeDesc: "See other people's comments even on episodes you haven't watched yet.",
+    spoilerModeDesc:
+      "See other people's comments even on episodes you haven't watched yet.",
     language: "Language",
     theme: "Theme",
     themeLight: "Light",
@@ -183,20 +287,25 @@ const en = {
     changePasswordSuccess: "Password updated.",
     changePasswordTooShort: "Password must be at least 6 characters.",
     downloadMyData: "Download my data",
-    downloadMyDataDesc: "Get a copy of everything Epify has stored for your account.",
+    downloadMyDataDesc:
+      "Get a copy of everything Epify has stored for your account.",
     downloadMyDataFailed: "Couldn't prepare your data export. Try again.",
     deleteAccount: "Delete account",
-    deleteAccountDesc: "Permanently deletes your account and all your data. This can't be undone.",
+    deleteAccountDesc:
+      "Permanently deletes your account and all your data. This can't be undone.",
     deleteAccountConfirmTitle: "Delete your account?",
-    deleteAccountConfirmMessage: "This permanently deletes your account and everything in it — shows, movies, comments, lists. This can't be undone.",
+    deleteAccountConfirmMessage:
+      "This permanently deletes your account and everything in it — shows, movies, comments, lists. This can't be undone.",
     deleteAccountConfirmButton: "Delete forever",
-    deleteAccountFailed: "Couldn't delete your account. Try again or contact support.",
+    deleteAccountFailed:
+      "Couldn't delete your account. Try again or contact support.",
     admin: "Admin",
     signOut: "Sign out",
   },
   report: {
     title: "Report",
-    subtitle: "Tell us what's wrong — reports are reviewed by the app's moderators.",
+    subtitle:
+      "Tell us what's wrong — reports are reviewed by the app's moderators.",
     placeholder: "What's the issue?",
     submit: "Submit report",
     submittedTitle: "Report submitted",
@@ -208,6 +317,18 @@ const en = {
     reportShow: "Report show",
     reportEpisode: "Report episode",
     reportMovie: "Report movie",
+  },
+  support: {
+    title: "Contact us",
+    composerLabel: "Send a message to the team",
+    placeholder: "Question, feedback, bug report, feature idea — anything.",
+    send: "Send",
+    sendFailed: "Couldn't send your message. Try again.",
+    historyLabel: "Your messages",
+    empty: "You haven't sent any messages yet.",
+    statusOpen: "Sent",
+    statusResolved: "Answered",
+    replyLabel: "Reply",
   },
   admin: {
     title: "Admin",
@@ -225,6 +346,16 @@ const en = {
     targetShow: "Show",
     targetEpisode: "Episode",
     targetMovie: "Movie",
+    reportsTab: "Reports",
+    usersTab: "Users",
+    supportTab: "Support",
+    noSupportMessages: "No messages here.",
+    searchUsersPlaceholder: "Search by username",
+    noUsers: "No users found.",
+    adminBadge: "ADMIN",
+    bannedLabel: "Suspended",
+    ban: "Suspend",
+    unban: "Unsuspend",
   },
   showDetail: {
     inMyList: "In my list",
@@ -256,7 +387,8 @@ const en = {
     howDidYouFeel: "How did it make you feel?",
     othersFelt: "How others felt",
     comments: "Comments",
-    unwatchedPrompt: "Mark this episode as watched to rate it, react, and see comments.",
+    unwatchedPrompt:
+      "Mark this episode as watched to rate it, react, and see comments.",
     addFavorite: "Add to favorite episodes",
     removeFavorite: "Remove from favorite episodes",
   },
@@ -337,6 +469,36 @@ const fr: typeof en = {
     buy: "Achat",
     noProviders: "Aucune info de diffusion disponible.",
     youMightAlsoLike: "Vous pourriez aussi aimer",
+    somethingWentWrong: "Une erreur est survenue",
+    somethingWentWrongDetail:
+      "Impossible de charger ce contenu — il n'existe peut-être plus, ou il y a eu un problème réseau.",
+    backToShows: "Retour aux séries",
+  },
+  onboarding: {
+    skip: "Passer",
+    next: "Suivant",
+    getStarted: "Commencer",
+    slide1Title: "Garde toutes tes séries au même endroit",
+    slide1Body:
+      "Watch Next reste toujours en haut, pour savoir quoi regarder ensuite — et les séries de jours te donnent envie de revenir.",
+    slide2Title: "Ne rate plus un épisode",
+    slide2Body:
+      "Vois ce qui sort aujourd'hui et cette semaine, dans l'ordre, avec les nouveautés mises en avant.",
+    slide3Title: "Découvre de nouvelles pépites",
+    slide3Body:
+      "Des suggestions basées sur ce que tu regardes vraiment, en plus de ce qui est populaire en ce moment.",
+    slide4Title: "Note & réagis",
+    slide4Body:
+      "Note chaque épisode, partage ton ressenti, et découvre ce que les autres en ont pensé.",
+    slide5Title: "Suis aussi tes films",
+    slide5Body:
+      "Garde une liste à voir, note ce que tu as vu — au même endroit que tes séries.",
+    slide6Title: "Suis tes amis",
+    slide6Body:
+      "Vois ce que les personnes que tu suis regardent et notent, et reste au courant de leur activité.",
+    slide7Title: "Rends-le tien",
+    slide7Body:
+      "Débloque des séries de jours et des badges, personnalise ton profil, et suis tes stats au fil du temps.",
   },
   login: {
     tagline: "Suis tes séries",
@@ -353,7 +515,8 @@ const fr: typeof en = {
     username: "Pseudo",
     signUp: "S'inscrire",
     hasAccountPrompt: "Déjà un compte ?",
-    success: "Compte créé. Vérifie ta boîte mail si une confirmation est requise.",
+    success:
+      "Compte créé. Vérifie ta boîte mail si une confirmation est requise.",
     usernameInvalid: "3 à 20 lettres, chiffres ou underscores.",
     usernameTaken: "Ce pseudo est déjà pris.",
     passwordTooShort: "Le mot de passe doit faire au moins 6 caractères.",
@@ -367,10 +530,12 @@ const fr: typeof en = {
   },
   activity: {
     title: "Activité",
+    subtitle: "Ce que regardent les gens que tu suis",
     empty: "Aucune activité pour l'instant.",
     emptyNoFollows: "Suis des gens pour voir ce qu'ils regardent ici.",
     findPeople: "Trouver des amis",
-    watchedEpisode: (season: number, number: number) => `a regardé S${season}E${number} de`,
+    watchedEpisode: (season: number, number: number) =>
+      `a regardé S${season}E${number} de`,
     watchedMovie: "a regardé",
     commentedOnShow: "a commenté",
     commentedOnEpisode: "a commenté un épisode de",
@@ -387,11 +552,38 @@ const fr: typeof en = {
     remainingEpisodes: "Épisodes restants à voir",
     remainingEpisodesSubtitle: "Sur les séries en cours de visionnage",
     notStartedEpisodes: "Épisodes qui t'attendent",
-    notStartedEpisodesSubtitle: "Sur les séries de ta liste pas encore commencées",
+    notStartedEpisodesSubtitle:
+      "Sur les séries de ta liste pas encore commencées",
     genreBreakdown: "Genres les plus regardés",
     genreShowCount: (n: number) => `${n} série${n > 1 ? "s" : ""}`,
+    showsTab: "Séries",
+    topShows: "Séries les plus binge-watchées",
+    bingeCount: (n: number) => `${n} en 1 jour`,
+    episodeCount: (n: number) => `${n} épisode${n > 1 ? "s" : ""}`,
+    moviesSection: "Films",
+    moviesPerMonth: "Films par mois",
+    totalMoviesWatched: "Total de films vus",
+    topMovies: "Films les plus revus",
+    watchCount: (n: number) => `vu ${n}×`,
     noHistory: "Regarde quelques épisodes pour voir tes statistiques ici.",
     computedAt: (date: string) => `Mis à jour ${date}`,
+  },
+  recap: {
+    watchTimeLabel: "heures regardées",
+    episodesLabel: "épisodes",
+    moviesLabel: "films",
+    newShowsLabel: "séries commencées",
+    daysActiveLabel: "jours actifs",
+    topShowLabel: "Série la plus regardée",
+    topGenreLabel: "Genre préféré",
+    empty: (year: number) => `Rien regardé en ${year} pour l'instant.`,
+    shareTitle: (year: number) => `Mon année ${year} sur Epify`,
+    totalWatchTime: (h: string) => `${h}h regardées`,
+    episodeCount: (n: number) => `${n} épisodes`,
+    movieCount: (n: number) => `${n} films`,
+    topShowLine: (name: string) => `Plus regardée : ${name}`,
+    topGenreLine: (genre: string) => `Genre préféré : ${genre}`,
+    notAvailable: "Ton bilan s'ouvre la dernière semaine de décembre.",
   },
   shows: {
     tabList: "Ma liste",
@@ -402,6 +594,7 @@ const fr: typeof en = {
     emptyToday: "Rien de prévu aujourd'hui.",
     emptyWatchList: "Ajoute des séries à suivre pour les voir ici.",
     tmdbOnlyTitle: "En attente d'ajout",
+    streakDays: (n: number) => `${n} jour${n > 1 ? "s" : ""} de suite`,
   },
   movies: {
     title: "Films",
@@ -411,7 +604,8 @@ const fr: typeof en = {
     overview: "Synopsis",
     tabList: "Ma liste",
     tabUpcoming: "À venir",
-    emptyUpcoming: "Ta liste est vide — ajoute des films depuis Explorer ou la page d'un film.",
+    emptyUpcoming:
+      "Ta liste est vide — ajoute des films depuis Explorer ou la page d'un film.",
     emptyWatchlist: "Ajoute des films à ta liste pour les voir ici.",
     releasesOn: (date: string) => `Sortie le ${date}`,
     addToWatchlist: "Ajouter à ma liste",
@@ -431,6 +625,7 @@ const fr: typeof en = {
     categoryKdrama: "K-Drama",
     categorySciFi: "Science-fiction",
     categoryNew: "Dernières sorties",
+    categoryForYou: "Pour toi",
     categoryPopularMovies: "Les plus populaires",
     categoryTopRatedMovies: "Les mieux notés",
     categoryNowPlayingMovies: "Au cinéma",
@@ -439,12 +634,45 @@ const fr: typeof en = {
     resultsShows: "Séries",
     resultsMovies: "Films",
     noMatchTitle: "Série introuvable",
-    noMatchDesc: "Cette série n'est pas disponible sur TVmaze, que l'app utilise pour suivre les épisodes.",
+    noMatchDesc:
+      "Cette série n'est pas disponible sur TVmaze, que l'app utilise pour suivre les épisodes.",
   },
   profile: {
+    recapTitle: (year: number) => `Ton bilan ${year}`,
+    recapSubtitle: "Découvre ton année séries et films",
+    changePhoto: "Changer la photo",
+    changePhotoFailed: "Impossible de mettre à jour ta photo. Réessaie.",
+    streaksTitle: "Séries de jours & badges",
+    streakBannerActive: (n: number) => `${n} jours de suite — continue !`,
+    streakBannerInactive:
+      "Regarde quelque chose aujourd'hui pour démarrer une série",
+    currentStreak: "Jours de suite",
+    longestStreak: "Meilleure série",
+    badgeCategoryEpisodes: "Épisodes vus",
+    badgeCategoryMovies: "Films vus",
+    badgeCategoryShows: "Séries terminées",
+    badgeCategoryStreak: "Séries de jours",
+    badgeCategoryRatings: "Notes données",
+    badgeCategorySocial: "Personnes suivies",
+    badgeCategoryRewatch: "Revisionnages",
+    badgeEpisodes: (n: number) => `${n} épisodes`,
+    badgeMovies: (n: number) => `${n} films`,
+    badgeShows: (n: number) =>
+      `${n} série${n > 1 ? "s" : ""} finie${n > 1 ? "s" : ""}`,
+    badgeStreak: (n: number) => `${n} jours de suite`,
+    badgeRatings: (n: number) => `${n} note${n > 1 ? "s" : ""}`,
+    badgeSocial: (n: number) => `${n} suivi${n > 1 ? "s" : ""}`,
+    badgeRewatch: (n: number) => `${n} revisionnage${n > 1 ? "s" : ""}`,
+    badgeProgress: (n: number, threshold: number) => `${n}/${threshold}`,
+    badgeCollected: (n: number, total: number) => `${n} badge${n > 1 ? "s" : ""} sur ${total} obtenu${n > 1 ? "s" : ""}`,
+    badgeEarnedOn: (date: string) => `Obtenu le ${date}`,
+    badgeRemaining: (n: number) => (n === 1 ? "Encore 1 pour débloquer" : `Encore ${n} pour débloquer`),
+    badgeUnlockedTitle: "Badge débloqué",
     statistics: "Statistiques",
-    favorites: "Favoris",
+    favorites: "Séries favoris",
     favoriteEpisodes: "Épisodes favoris",
+    favoriteMovies: "Films favoris",
+    noFavoriteMovies: "Aucun film favori pour l'instant.",
     lists: "Listes",
     shows: "Séries",
     dropped: "Arrêtées",
@@ -469,7 +697,8 @@ const fr: typeof en = {
     createList: "Créer une liste",
     newListPlaceholder: "Nom de la liste",
     importTitle: "Importer depuis TV Time",
-    importSubtitle: "Charge ton export CSV ou JSON récupéré de TV Time (by Refract) pour récupérer ton historique.",
+    importSubtitle:
+      "Charge ton export CSV ou JSON récupéré de TV Time (by Refract) pour récupérer ton historique.",
     importInvalidFileTitle: "Fichier invalide",
     importInvalidFileMsg: "Choisis un export CSV ou JSON de TV Time.",
     importMatching: "Recherche des séries",
@@ -477,12 +706,14 @@ const fr: typeof en = {
     importDoneTitle: "Import terminé",
     importDone: (shows: number, episodes: number, movies: number) =>
       `${shows} série(s) importée(s), ${episodes} épisode(s) marqué(s) comme vu(s), ${movies} film(s) importé(s).`,
-    importUnmatched: (n: number, names: string) => `\n${n} série(s) introuvable(s) sur TVmaze : ${names}`,
+    importUnmatched: (n: number, names: string) =>
+      `\n${n} série(s) introuvable(s) sur TVmaze : ${names}`,
     importFailedTitle: "Échec de l'import",
     importFailedUnknown: "Erreur inconnue.",
     importReadError: "Impossible de lire le fichier sélectionné.",
     spoilerMode: "Mode spoilers",
-    spoilerModeDesc: "Voir les commentaires des autres même sur les épisodes que tu n'as pas encore vus.",
+    spoilerModeDesc:
+      "Voir les commentaires des autres même sur les épisodes que tu n'as pas encore vus.",
     language: "Langue",
     theme: "Thème",
     themeLight: "Clair",
@@ -499,20 +730,25 @@ const fr: typeof en = {
     changePasswordSuccess: "Mot de passe mis à jour.",
     changePasswordTooShort: "Le mot de passe doit faire au moins 6 caractères.",
     downloadMyData: "Télécharger mes données",
-    downloadMyDataDesc: "Récupère une copie de tout ce qu'Epify a enregistré pour ton compte.",
+    downloadMyDataDesc:
+      "Récupère une copie de tout ce qu'Epify a enregistré pour ton compte.",
     downloadMyDataFailed: "Impossible de préparer l'export. Réessaie.",
     deleteAccount: "Supprimer le compte",
-    deleteAccountDesc: "Supprime définitivement ton compte et toutes tes données. Action irréversible.",
+    deleteAccountDesc:
+      "Supprime définitivement ton compte et toutes tes données. Action irréversible.",
     deleteAccountConfirmTitle: "Supprimer ton compte ?",
-    deleteAccountConfirmMessage: "Ça supprime définitivement ton compte et tout son contenu — séries, films, commentaires, listes. Action irréversible.",
+    deleteAccountConfirmMessage:
+      "Ça supprime définitivement ton compte et tout son contenu — séries, films, commentaires, listes. Action irréversible.",
     deleteAccountConfirmButton: "Supprimer définitivement",
-    deleteAccountFailed: "Impossible de supprimer le compte. Réessaie ou contacte le support.",
+    deleteAccountFailed:
+      "Impossible de supprimer le compte. Réessaie ou contacte le support.",
     admin: "Admin",
     signOut: "Se déconnecter",
   },
   report: {
     title: "Signaler",
-    subtitle: "Explique le problème — les signalements sont examinés par les modérateurs de l'app.",
+    subtitle:
+      "Explique le problème — les signalements sont examinés par les modérateurs de l'app.",
     placeholder: "Quel est le problème ?",
     submit: "Envoyer le signalement",
     submittedTitle: "Signalement envoyé",
@@ -525,6 +761,19 @@ const fr: typeof en = {
     reportEpisode: "Signaler l'épisode",
     reportMovie: "Signaler le film",
   },
+  support: {
+    title: "Nous contacter",
+    composerLabel: "Envoyer un message à l'équipe",
+    placeholder:
+      "Question, retour, bug, idée de fonctionnalité — tout est bon à prendre.",
+    send: "Envoyer",
+    sendFailed: "Impossible d'envoyer ton message. Réessaie.",
+    historyLabel: "Tes messages",
+    empty: "Tu n'as pas encore envoyé de message.",
+    statusOpen: "Envoyé",
+    statusResolved: "Répondu",
+    replyLabel: "Réponse",
+  },
   admin: {
     title: "Admin",
     open: "Ouverts",
@@ -534,13 +783,24 @@ const fr: typeof en = {
     reportedBy: "Signalé par",
     resolve: "Résoudre",
     dismiss: "Rejeter",
-    resolutionNotePlaceholder: "Note optionnelle (non visible par le rapporteur)",
+    resolutionNotePlaceholder:
+      "Note optionnelle (non visible par le rapporteur)",
     targetUser: "Utilisateur",
     targetComment: "Commentaire",
     targetMovieComment: "Commentaire de film",
     targetShow: "Série",
     targetEpisode: "Épisode",
     targetMovie: "Film",
+    reportsTab: "Signalements",
+    usersTab: "Utilisateurs",
+    supportTab: "Support",
+    noSupportMessages: "Aucun message ici.",
+    searchUsersPlaceholder: "Rechercher par nom d'utilisateur",
+    noUsers: "Aucun utilisateur trouvé.",
+    adminBadge: "ADMIN",
+    bannedLabel: "Suspendu",
+    ban: "Suspendre",
+    unban: "Réactiver",
   },
   showDetail: {
     inMyList: "Dans ma liste",
@@ -567,12 +827,14 @@ const fr: typeof en = {
   episodeDetail: {
     notWatched: "Pas encore vu",
     remainingAll: "Tous les épisodes ont été vus",
-    remaining: (n: number) => `${n} épisode${n > 1 ? "s" : ""} restant${n > 1 ? "s" : ""}`,
+    remaining: (n: number) =>
+      `${n} épisode${n > 1 ? "s" : ""} restant${n > 1 ? "s" : ""}`,
     yourRating: "Ta note",
     howDidYouFeel: "Comment tu l'as vécu ?",
     othersFelt: "Le ressenti des autres",
     comments: "Commentaires",
-    unwatchedPrompt: "Marque l'épisode comme vu pour le noter, réagir et voir les commentaires.",
+    unwatchedPrompt:
+      "Marque l'épisode comme vu pour le noter, réagir et voir les commentaires.",
     addFavorite: "Ajouter aux épisodes favoris",
     removeFavorite: "Retirer des épisodes favoris",
   },
@@ -696,11 +958,21 @@ export function LanguageProvider({ children }: PropsWithChildren) {
   }, [language]);
 
   const value = useMemo(
-    () => ({ language, setLanguage, spoilerMode, setSpoilerMode, t: dictionaries[language] }),
-    [language, setLanguage, spoilerMode, setSpoilerMode]
+    () => ({
+      language,
+      setLanguage,
+      spoilerMode,
+      setSpoilerMode,
+      t: dictionaries[language],
+    }),
+    [language, setLanguage, spoilerMode, setSpoilerMode],
   );
 
-  return <SettingsContext.Provider value={value}>{children}</SettingsContext.Provider>;
+  return (
+    <SettingsContext.Provider value={value}>
+      {children}
+    </SettingsContext.Provider>
+  );
 }
 
 export function useLanguage() {

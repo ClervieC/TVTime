@@ -54,6 +54,7 @@ import { useGrowIn, useFadeIn, useScalePress, useMountIn, useSwipeDownToDismiss 
 import { WatchedCheck } from "../../components/WatchedCheck";
 import { CommentsSection } from "../../components/CommentsSection";
 import { ReportModal } from "../../components/ReportModal";
+import { DetailErrorState } from "../../components/DetailErrorState";
 import { Sheet } from "../../components/Sheet";
 import { usePreviousEpisodesPrompt } from "../../context/PreviousEpisodesPromptContext";
 import { useRewatchPrompt } from "../../context/RewatchPromptContext";
@@ -86,6 +87,7 @@ export default function ShowDetailScreen() {
   const [watched, setWatched] = useState<WatchedEpisode[]>([]);
   const [expandedSeason, setExpandedSeason] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [reporting, setReporting] = useState(false);
   const [listPickerOpen, setListPickerOpen] = useState(false);
@@ -190,7 +192,10 @@ export default function ShowDetailScreen() {
     useCallback(() => {
       let active = true;
       setLoading(true);
-      load().finally(() => active && setLoading(false));
+      setLoadError(false);
+      load()
+        .catch(() => active && setLoadError(true))
+        .finally(() => active && setLoading(false));
       return () => {
         active = false;
       };
@@ -439,6 +444,10 @@ export default function ShowDetailScreen() {
     else if (choice === "unwatch") await unmarkSeasonWatched(eps);
   }
 
+  if (loadError) {
+    return <DetailErrorState onBack={goBack} />;
+  }
+
   if (loading || !show) {
     return (
       <View style={styles.center}>
@@ -455,7 +464,7 @@ export default function ShowDetailScreen() {
         <GestureDetector gesture={swipeDownGesture}>
           <Reanimated.View style={[styles.hero, swipeDownStyle]}>
             {show.image && <Image source={{ uri: show.image.original }} style={styles.heroImage} />}
-            <LinearGradient colors={["transparent", colors.background]} style={styles.heroGradient} pointerEvents="none" />
+            <LinearGradient colors={["transparent", colors.background]} style={[styles.heroGradient, { pointerEvents: "none" }]} />
             <View style={styles.heroTopRow}>
               <Pressable
                 style={styles.iconBtn}

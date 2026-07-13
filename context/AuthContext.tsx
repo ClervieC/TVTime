@@ -8,6 +8,8 @@ import { clearAllShowDataCaches } from "../lib/showDataCache";
 import { resetPrefetchState } from "../lib/backgroundPrefetch";
 import { clearLocalShowStats } from "../lib/showStats";
 import { clearProfileSnapshot } from "../lib/profileSnapshot";
+import { clearLocalStreakData } from "../lib/streaks";
+import { alert } from "../lib/alert";
 
 // None of these caches' storage keys are scoped by user id (see each
 // module's own comment) — without clearing them here, signing into a
@@ -20,6 +22,7 @@ function clearUserScopedCaches() {
   resetPrefetchState();
   clearLocalShowStats();
   clearProfileSnapshot();
+  clearLocalStreakData();
 }
 
 interface AuthContextValue {
@@ -62,6 +65,27 @@ export function AuthProvider({ children }: PropsWithChildren) {
 
     return () => listener.subscription.unsubscribe();
   }, []);
+
+  // Soft ban check — is_banned (see supabase/schema.sql) is enforced here
+  // rather than at the auth layer, since there's no server-side session
+  // revocation set up: a banned account's session stays technically valid,
+  // this just signs it back out immediately on the next app open/session
+  // check, same as any other client-side gate in this app.
+  useEffect(() => {
+    if (!session) return;
+    let active = true;
+    fetchMyProfile().then((profile) => {
+      if (!active || !profile?.is_banned) return;
+      // Hardcoded, not lib/i18n's t() — LanguageProvider is mounted *inside*
+      // AuthProvider (see app/_layout.tsx), so this runs before it's
+      // available, same reasoning as ErrorBoundary's own fixed copy.
+      alert("Account suspended", "This account has been suspended for violating community guidelines.");
+      supabase.auth.signOut();
+    });
+    return () => {
+      active = false;
+    };
+  }, [session]);
 
   // Finishes provisioning the profile row for an account that signed up
   // needing email confirmation (see app/(auth)/signup.tsx and

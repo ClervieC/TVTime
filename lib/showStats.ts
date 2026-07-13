@@ -29,7 +29,7 @@ const PAGE_SIZE = 1000;
 // exist unconditionally (e.g. episodesPerMonth.map crashing on undefined), so
 // fetchCachedShowStats() below treats a version mismatch as "no cache" and
 // triggers an immediate recompute instead of returning the stale shape as-is.
-const STATS_SCHEMA_VERSION = 4;
+const STATS_SCHEMA_VERSION = 7;
 
 export interface WeekBucket {
   weekStart: string; // ISO date (Monday) of that bucket
@@ -46,6 +46,21 @@ export interface GenreCount {
   count: number;
 }
 
+export interface TopShow {
+  showId: number;
+  name: string;
+  image: string | null;
+  episodeCount: number;
+}
+
+export interface TopMovie {
+  movieId: string;
+  title: string;
+  year: number | null;
+  posterPath: string | null;
+  timesWatched: number;
+}
+
 export interface ShowStats {
   schemaVersion: number;
   episodesPerWeek: WeekBucket[];
@@ -56,6 +71,11 @@ export interface ShowStats {
   remainingEpisodes: number;
   notStartedEpisodes: number;
   genreBreakdown: GenreCount[];
+  topShows: TopShow[];
+  totalMoviesWatched: number;
+  moviesPerMonth: MonthBucket[];
+  averageMoviesPerMonth: number;
+  topMovies: TopMovie[];
   computedAt: string;
 }
 
@@ -119,14 +139,26 @@ export async function computeShowStats(): Promise<ShowStats> {
   const monthBucketIndex = new Map(monthBuckets.map((b, i) => [b.monthStart, i]));
 
   const watchedCountByShow = new Map<number, number>();
+  // Show id + calendar day -> episodes watched that day, for the "most
+  // binge-watched" ranking below — a real binge session (a dozen episodes
+  // in one sitting) should outrank a show watched at a slow steady drip for
+  // years just because the lifetime total is higher.
+  const dailyCountByShow = new Map<string, number>();
   for (const ep of watched) {
     watchedCountByShow.set(ep.tvmaze_show_id, (watchedCountByShow.get(ep.tvmaze_show_id) ?? 0) + 1);
+    const dayKey = `${ep.tvmaze_show_id}:${ep.watched_at.slice(0, 10)}`;
+    dailyCountByShow.set(dayKey, (dailyCountByShow.get(dayKey) ?? 0) + 1);
     const weekKey = weekStartOf(ep.watched_at);
     const weekIdx = bucketIndex.get(weekKey);
     if (weekIdx != null) buckets[weekIdx].count += 1;
     const monthKey = monthStartOf(ep.watched_at);
     const monthIdx = monthBucketIndex.get(monthKey);
     if (monthIdx != null) monthBuckets[monthIdx].count += 1;
+  }
+  const maxDailyByShow = new Map<number, number>();
+  for (const [key, count] of dailyCountByShow) {
+    const showId = Number(key.split(":")[0]);
+    maxDailyByShow.set(showId, Math.max(maxDailyByShow.get(showId) ?? 0, count));
   }
   const averagePerWeek = buckets.reduce((sum, b) => sum + b.count, 0) / WEEK_COUNT;
   const averagePerMonth = monthBuckets.reduce((sum, b) => sum + b.count, 0) / MONTH_COUNT;
@@ -149,6 +181,7 @@ export async function computeShowStats(): Promise<ShowStats> {
   const todayIso = todayISODate();
 
   const genreTotals = new Map<string, number>();
+  const showInfoById = new Map<number, { name: string; image: string | null }>();
   let remainingEpisodes = 0;
   let notStartedEpisodes = 0;
 
@@ -164,6 +197,7 @@ export async function computeShowStats(): Promise<ShowStats> {
           for (const genre of info.genres) {
             genreTotals.set(genre, (genreTotals.get(genre) ?? 0) + 1);
           }
+          showInfoById.set(show.tvmaze_id, { name: info.name, image: info.image?.medium ?? null });
         } catch {
           // Show metadata unavailable — skip it for the genre breakdown.
         }
@@ -194,6 +228,27 @@ export async function computeShowStats(): Promise<ShowStats> {
     .sort((a, b) => b.count - a.count)
     .slice(0, 8);
 
+  // Most binge-watched shows — ranked by the most episodes watched of that
+  // show in a single day (a real binge session), not lifetime total, so a
+  // show watched steadily for years doesn't outrank one you tore through in
+  // a weekend. episodeCount here is that single-day peak, not a total.
+  const topShows: TopShow[] = [...maxDailyByShow.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 5)
+    .map(([showId, episodeCount]) => ({
+      showId,
+      name: showInfoById.get(showId)?.name ?? `#${showId}`,
+      image: showInfoById.get(showId)?.image ?? null,
+      episodeCount,
+    }));
+
+  const {
+    totalMoviesWatched,
+    moviesPerMonth,
+    averageMoviesPerMonth,
+    topMovies,
+  } = await computeMovieStats(today);
+
   return {
     schemaVersion: STATS_SCHEMA_VERSION,
     episodesPerWeek: buckets,
@@ -204,8 +259,53 @@ export async function computeShowStats(): Promise<ShowStats> {
     remainingEpisodes,
     notStartedEpisodes,
     genreBreakdown,
+    topShows,
+    totalMoviesWatched,
+    moviesPerMonth,
+    averageMoviesPerMonth,
+    topMovies,
     computedAt: new Date().toISOString(),
   };
+}
+
+async function computeMovieStats(today: Date): Promise<{
+  totalMoviesWatched: number;
+  moviesPerMonth: MonthBucket[];
+  averageMoviesPerMonth: number;
+  topMovies: TopMovie[];
+}> {
+  const userId = await getCurrentUserId();
+  if (!userId) {
+    return { totalMoviesWatched: 0, moviesPerMonth: [], averageMoviesPerMonth: 0, topMovies: [] };
+  }
+
+  const { data, error } = await supabase
+    .from("user_movies")
+    .select("id, title, year, poster_path, times_watched, watched_at")
+    .eq("user_id", userId)
+    .eq("status", "watched");
+  if (error) throw error;
+  const movies = data ?? [];
+
+  const monthBuckets: MonthBucket[] = [];
+  for (let i = MONTH_COUNT - 1; i >= 0; i--) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    monthBuckets.push({ monthStart: monthStartOf(d.toISOString()), count: 0 });
+  }
+  const monthBucketIndex = new Map(monthBuckets.map((b, i) => [b.monthStart, i]));
+  for (const m of movies) {
+    if (!m.watched_at) continue;
+    const idx = monthBucketIndex.get(monthStartOf(m.watched_at));
+    if (idx != null) monthBuckets[idx].count += 1;
+  }
+  const averageMoviesPerMonth = monthBuckets.reduce((sum, b) => sum + b.count, 0) / MONTH_COUNT;
+
+  const topMovies: TopMovie[] = [...movies]
+    .sort((a, b) => b.times_watched - a.times_watched)
+    .slice(0, 5)
+    .map((m) => ({ movieId: m.id, title: m.title, year: m.year, posterPath: m.poster_path, timesWatched: m.times_watched }));
+
+  return { totalMoviesWatched: movies.length, moviesPerMonth: monthBuckets, averageMoviesPerMonth, topMovies };
 }
 
 // Instant, no-network read for the very first paint of app/stats/shows.tsx —

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, StyleSheet } from "react-native";
 import { Image } from "expo-image";
 import { useColors } from "../lib/theme";
+import { NATIVE_DRIVER } from "../lib/animations";
 
 interface AppSplashProps {
   visible: boolean;
@@ -24,14 +25,14 @@ export function AppSplash({ visible }: AppSplashProps) {
   // ends up being.
   useEffect(() => {
     Animated.parallel([
-      Animated.timing(logoOpacity, { toValue: 1, duration: 420, useNativeDriver: true }),
-      Animated.spring(logoScale, { toValue: 1, useNativeDriver: true, speed: 10, bounciness: 6 }),
+      Animated.timing(logoOpacity, { toValue: 1, duration: 420, useNativeDriver: NATIVE_DRIVER }),
+      Animated.spring(logoScale, { toValue: 1, useNativeDriver: NATIVE_DRIVER, speed: 10, bounciness: 6 }),
     ]).start();
 
     const loop = Animated.loop(
       Animated.sequence([
-        Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
-        Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: true }),
+        Animated.timing(pulse, { toValue: 1, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: NATIVE_DRIVER }),
+        Animated.timing(pulse, { toValue: 0, duration: 900, easing: Easing.inOut(Easing.ease), useNativeDriver: NATIVE_DRIVER }),
       ])
     );
     loop.start();
@@ -46,7 +47,7 @@ export function AppSplash({ visible }: AppSplashProps) {
       overlayOpacity.setValue(1);
       return;
     }
-    Animated.timing(overlayOpacity, { toValue: 0, duration: 380, useNativeDriver: true }).start(({ finished }) => {
+    Animated.timing(overlayOpacity, { toValue: 0, duration: 380, useNativeDriver: NATIVE_DRIVER }).start(({ finished }) => {
       if (finished) setMounted(false);
     });
   }, [visible, overlayOpacity]);
@@ -57,8 +58,11 @@ export function AppSplash({ visible }: AppSplashProps) {
 
   return (
     <Animated.View
-      pointerEvents={visible ? "auto" : "none"}
-      style={[StyleSheet.absoluteFill, styles.container, { backgroundColor: colors.background, opacity: overlayOpacity }]}
+      style={[
+        StyleSheet.absoluteFill,
+        styles.container,
+        { backgroundColor: colors.background, opacity: overlayOpacity, pointerEvents: visible ? "auto" : "none" },
+      ]}
     >
       <Animated.View style={{ opacity: logoOpacity, transform: [{ scale: Animated.multiply(logoScale, pulseScale) }] }}>
         <Image source={require("../assets/logo.png")} style={styles.logo} contentFit="contain" />

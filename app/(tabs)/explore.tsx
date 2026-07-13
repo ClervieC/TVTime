@@ -12,6 +12,7 @@ import {
   Image,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect, useNavigation } from "expo-router";
 import { searchShows, TVMazeShow } from "../../lib/tvmaze";
 import {
@@ -36,6 +37,7 @@ import {
   TMDBTvResult,
 } from "../../lib/tmdb";
 import { fetchUserMovieTmdbMap, addMovieToWatchlist, removeUserMovie, setMovieFavorite, UserMovie } from "../../lib/userMovies";
+import { fetchForYou } from "../../lib/forYou";
 import { useColors, radius, type, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
 import { useScalePress, useMountIn, useGrowIn } from "../../lib/animations";
@@ -102,10 +104,11 @@ export default function ExploreScreen() {
   // a result still needs to resolve to a TVmaze id (see ExploreTvCard) since
   // that's what the rest of the app tracks shows by.
   useEffect(() => {
-    Promise.all([getPopularTv(), getTopRatedTv(), getOnTheAirTv(), getUpcomingTv()]).then(
-      ([popular, topRated, onTheAir, upcoming]) => {
+    Promise.all([getPopularTv(), getTopRatedTv(), getOnTheAirTv(), getUpcomingTv(), fetchForYou()]).then(
+      ([popular, topRated, onTheAir, upcoming, forYou]) => {
         setShowCategories(
           [
+            { key: "forYouTv", title: t.explore.categoryForYou, data: forYou.shows },
             { key: "popularTv", title: t.explore.categoryPopularMovies, data: popular },
             { key: "topRatedTv", title: t.explore.categoryTopRatedMovies, data: topRated },
             { key: "onTheAirTv", title: t.explore.categoryOnTheAirTv, data: onTheAir },
@@ -156,10 +159,11 @@ export default function ExploreScreen() {
   }, [showCategories]);
 
   useEffect(() => {
-    Promise.all([getPopularMovies(), getTopRatedMovies(), getNowPlayingMovies(), getUpcomingMovies()]).then(
-      ([popular, topRated, nowPlaying, upcoming]) => {
+    Promise.all([getPopularMovies(), getTopRatedMovies(), getNowPlayingMovies(), getUpcomingMovies(), fetchForYou()]).then(
+      ([popular, topRated, nowPlaying, upcoming, forYou]) => {
         setMovieCategories(
           [
+            { key: "forYouMovies", title: t.explore.categoryForYou, data: forYou.movies },
             { key: "popularMovies", title: t.explore.categoryPopularMovies, data: popular },
             { key: "topRatedMovies", title: t.explore.categoryTopRatedMovies, data: topRated },
             { key: "nowPlayingMovies", title: t.explore.categoryNowPlayingMovies, data: nowPlaying },
@@ -385,6 +389,7 @@ export default function ExploreScreen() {
 
   return (
     <View style={styles.container}>
+      <LinearGradient colors={[`${colors.accent}1f`, "transparent"]} style={styles.headerGlow} />
       <Text style={styles.title}>{t.explore.title}</Text>
       <View style={styles.searchBar}>
         <Ionicons name="search" size={18} color={colors.textFaint} />
@@ -805,6 +810,7 @@ function ExploreMovieCard({
 function createStyles(colors: Colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
+    headerGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 140, pointerEvents: "none" },
     title: {
       fontSize: type.title,
       fontWeight: "800",
@@ -820,7 +826,13 @@ function createStyles(colors: Colors) {
       marginTop: 14,
       paddingHorizontal: 12,
       paddingVertical: 10,
-      backgroundColor: colors.backgroundAlt,
+      // surface + border rather than backgroundAlt — backgroundAlt is a flat
+      // tint close enough to the header gradient's own tint that the bar
+      // nearly disappeared into it. surface's stronger contrast plus an
+      // explicit border keeps it legible sitting on top of the gradient.
+      backgroundColor: colors.surface,
+      borderWidth: 1,
+      borderColor: colors.border,
       borderRadius: radius.sm,
     },
     searchInput: { flex: 1, fontSize: type.input, color: colors.text },

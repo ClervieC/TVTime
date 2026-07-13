@@ -23,7 +23,11 @@ const authFile = "e2e/.auth/user.json";
 
 export default defineConfig({
   testDir: "./e2e",
-  timeout: 30_000,
+  // Bumped from 30s — after a large batch of source edits, Metro's first
+  // bundle rebuild for a given route can genuinely take longer than that to
+  // compile and serve, which was timing out page.goto() before the app ever
+  // got a chance to render, not because of an actual bug.
+  timeout: 90_000,
   fullyParallel: true,
   // The whole suite sharing one real Supabase session/test account against
   // a single local dev server (see webServer below) starts producing
@@ -32,12 +36,16 @@ export default defineConfig({
   // Playwright's own CPU-count-based default worker count. This isn't
   // fixable by making individual tests more patient; it's a resource
   // ceiling.
-  workers: 6,
+  workers: 4,
   retries: 1,
   reporter: "list",
   use: {
     baseURL: "http://localhost:8081",
     trace: "on-first-retry",
+    // Same reasoning as the suite-level timeout above — a slow first-compile
+    // navigation shouldn't fail before the app even gets a chance to render.
+    navigationTimeout: 60_000,
+    actionTimeout: 20_000,
   },
   projects: [
     // Logs in once with the dedicated test account (see e2e/auth.setup.ts)

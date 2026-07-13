@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { View } from "react-native";
 import { Stack, useRouter, useSegments } from "expo-router";
 import { StatusBar } from "expo-status-bar";
@@ -11,11 +11,13 @@ import { ActivityProvider } from "../context/ActivityContext";
 import { NetworkProvider } from "../context/NetworkContext";
 import { RewatchPromptProvider } from "../context/RewatchPromptContext";
 import { PreviousEpisodesPromptProvider } from "../context/PreviousEpisodesPromptContext";
+import { BadgeUnlockProvider } from "../context/BadgeUnlockContext";
 import { LanguageProvider } from "../lib/i18n";
 import { ThemeProvider, useThemeMode } from "../lib/theme";
 import { AppSplash } from "../components/AppSplash";
 import { ErrorBoundary } from "../components/ErrorBoundary";
 import { OfflineBanner } from "../components/OfflineBanner";
+import { shouldShowOnboarding } from "../lib/onboarding";
 
 // Keeps the native splash screen (configured via the expo-splash-screen
 // config plugin in app.json) visible until the JS AppSplash overlay below
@@ -28,6 +30,19 @@ function RootNavigation() {
   const segments = useSegments();
   const router = useRouter();
   const nativeSplashHidden = useRef(false);
+  // null = not checked yet (or signed out) — deliberately distinct from
+  // false, so the redirect effect below doesn't fire a false "onboarding
+  // already done" redirect in the brief window before the async check below
+  // resolves.
+  const [needsOnboarding, setNeedsOnboarding] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    if (!session) {
+      setNeedsOnboarding(null);
+      return;
+    }
+    shouldShowOnboarding().then(setNeedsOnboarding);
+  }, [session]);
 
   useEffect(() => {
     if (loading) return;
@@ -36,13 +51,16 @@ function RootNavigation() {
     // stores expect a privacy policy link that doesn't require an account,
     // and it's a reasonable thing to want to check before signing up.
     const isLegalRoute = segments[0] === "legal";
+    const isOnboardingRoute = segments[0] === "onboarding";
 
     if (!session && !inAuthGroup && !isLegalRoute) {
       router.replace("/(auth)/login");
     } else if (session && inAuthGroup) {
-      router.replace("/(tabs)");
+      router.replace(needsOnboarding ? "/onboarding" : "/(tabs)");
+    } else if (session && needsOnboarding && !isOnboardingRoute && !isLegalRoute) {
+      router.replace("/onboarding");
     }
-  }, [session, loading, segments]);
+  }, [session, loading, segments, needsOnboarding]);
 
   // Universal fallback for the splash gate below: the Shows tab's own
   // loadData() (app/(tabs)/index.tsx) normally flips dataReady itself, but
@@ -80,6 +98,7 @@ function RootNavigation() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
+        <Stack.Screen name="onboarding" options={{ headerShown: false, gestureEnabled: false }} />
         <Stack.Screen name="show/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="show/tmdb/[id]" options={{ headerShown: false }} />
         <Stack.Screen name="episode/[id]" options={{ headerShown: false, presentation: "modal" }} />
@@ -92,6 +111,10 @@ function RootNavigation() {
         <Stack.Screen name="legal/privacy" options={{ headerShown: false }} />
         <Stack.Screen name="admin/index" options={{ headerShown: false }} />
         <Stack.Screen name="stats/shows" options={{ headerShown: false }} />
+        <Stack.Screen name="recap" options={{ headerShown: false }} />
+        <Stack.Screen name="support" options={{ headerShown: false }} />
+        <Stack.Screen name="settings" options={{ headerShown: false }} />
+        <Stack.Screen name="streaks" options={{ headerShown: false }} />
       </Stack>
       <AppSplash visible={showSplash} />
       <OfflineBanner />
@@ -120,7 +143,9 @@ export default function RootLayout() {
                       <View style={{ flex: 1 }}>
                         <RewatchPromptProvider>
                           <PreviousEpisodesPromptProvider>
-                            <RootNavigation />
+                            <BadgeUnlockProvider>
+                              <RootNavigation />
+                            </BadgeUnlockProvider>
                           </PreviousEpisodesPromptProvider>
                         </RewatchPromptProvider>
                       </View>

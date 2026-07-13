@@ -59,6 +59,7 @@ export default function ConnectionsScreen() {
           renderItem={({ item }) => (
             <UserRow
               username={item.username}
+              imageUri={item.avatar_url}
               onPress={() => router.push({ pathname: "/users/[id]", params: { id: item.user_id } })}
             />
           )}

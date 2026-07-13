@@ -102,7 +102,7 @@ export function CommentsSection({
         comments.map((c) => (
           <View key={c.id} style={styles.commentRow}>
             <View style={styles.commentHeader}>
-              <Avatar name={c.author?.username ?? t.comments.unknownUser} size="sm" />
+              <Avatar name={c.author?.username ?? t.comments.unknownUser} imageUri={c.author?.avatar_url} size="sm" />
               <Text style={styles.commentAuthor} numberOfLines={1}>
                 {c.author?.username ?? t.comments.unknownUser}
               </Text>

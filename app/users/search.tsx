@@ -89,6 +89,7 @@ export default function UserSearchScreen() {
         renderItem={({ item }) => (
           <UserRow
             username={item.username}
+            imageUri={item.avatar_url}
             onPress={() => router.push({ pathname: "/users/[id]", params: { id: item.user_id } })}
             trailing={
               <FollowButton

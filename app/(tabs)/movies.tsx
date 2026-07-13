@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { View, Text, Pressable, Animated, FlatList, StyleSheet, ActivityIndicator, useWindowDimensions } from "react-native";
 import { Image } from "expo-image";
+import { LinearGradient } from "expo-linear-gradient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { fetchUserMovies, fetchMovieWatchlist, setMovieWatched, UserMovie } from "../../lib/userMovies";
 import { getMovieDetails, posterUrl, TMDBMovieDetails } from "../../lib/tmdb";
@@ -170,9 +171,13 @@ export default function MoviesScreen() {
 
   return (
     <View style={styles.container}>
+      <LinearGradient colors={[`${colors.accent}1f`, "transparent"]} style={styles.headerGlow} />
       <View style={styles.header}>
         <Text style={styles.title}>{t.movies.title}</Text>
-        {tab === "list" && <Pill>{movies.length}</Pill>}
+        {/* accent tone rather than the default neutral pillBg — neutral was
+            close enough to the header gradient's own tint to nearly vanish
+            into it. */}
+        {tab === "list" && <Pill tone="accent">{movies.length}</Pill>}
       </View>
 
       <View style={styles.tabsRow}>
@@ -322,6 +327,7 @@ function UpcomingRow({
 function createStyles(colors: Colors) {
   return StyleSheet.create({
     container: { flex: 1, backgroundColor: colors.background },
+    headerGlow: { position: "absolute", top: 0, left: 0, right: 0, height: 140, pointerEvents: "none" },
     header: {
       flexDirection: "row",
       alignItems: "center",

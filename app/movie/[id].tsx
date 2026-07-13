@@ -38,6 +38,7 @@ import { MovieDetailView, MovieDetailLoading } from "../../components/MovieDetai
 import { MovieRatingSection } from "../../components/MovieRatingSection";
 import { RecommendationItem } from "../../components/RecommendationsRow";
 import { useGoBack } from "../../lib/useGoBack";
+import { DetailErrorState } from "../../components/DetailErrorState";
 
 // user_movies (from the TV Time import, or added via Explore/the watchlist)
 // only ever has a title/year, never a TMDB id for older rows, so the poster/
@@ -54,6 +55,7 @@ export default function MovieDetailScreen() {
 
   const [movie, setMovie] = useState<UserMovie | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [tmdb, setTmdb] = useState<TMDBMovieDetails | null>(null);
   const [tmdbNotFound, setTmdbNotFound] = useState(false);
   const [cast, setCast] = useState<TMDBCastMember[]>([]);
@@ -65,8 +67,14 @@ export default function MovieDetailScreen() {
     useCallback(() => {
       let active = true;
       setLoading(true);
+      setLoadError(false);
       fetchUserMovie(id)
-        .then((data) => active && setMovie(data))
+        .then((data) => {
+          if (!active) return;
+          if (!data) setLoadError(true);
+          else setMovie(data);
+        })
+        .catch(() => active && setLoadError(true))
         .finally(() => active && setLoading(false));
       return () => {
         active = false;
@@ -132,6 +140,7 @@ export default function MovieDetailScreen() {
     };
   }, [movie?.status, commentTmdbId]);
 
+  if (loadError) return <DetailErrorState onBack={goBack} />;
   if (loading || !movie) return <MovieDetailLoading />;
 
   const isWatched = movie.status === "watched";

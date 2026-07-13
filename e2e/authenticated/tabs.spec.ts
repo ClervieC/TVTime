@@ -35,5 +35,7 @@ test("navigates to the Profile tab and shows account info", async ({ page }) => 
   await page.getByText("Profile", { exact: true }).click();
   await expect(page).toHaveURL(/\/profile$/);
   await expect(page.getByText("Statistics", { exact: true })).toBeVisible();
-  await expect(page.getByText("Settings", { exact: true })).toBeVisible();
+  // Settings/Legal/Account moved to their own screen behind this gear icon
+  // (see app/settings.tsx) — Profile itself no longer has a "Settings" label.
+  await expect(page.getByLabel("Settings", { exact: true })).toBeVisible();
 });

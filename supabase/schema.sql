@@ -642,3 +642,133 @@ create policy "Users manage their own show stats cache"
 -- ============================================================
 alter table public.watched_episodes
   add column if not exists is_favorite boolean not null default false;
+
+-- ============================================================
+-- User moderation — lets admins act on a person directly (not just on a
+-- specific report), from a new "Users" section in the admin console
+-- (app/admin/index.tsx). is_banned is enforced client-side (a banned user's
+-- session still exists — this isn't auth-level revocation, just a flag the
+-- app checks) for the same reason reports.status is: no server-side
+-- deletion or lockout infrastructure exists yet, and a soft flag an admin
+-- can reverse is a safer first step than something destructive. Purely
+-- additive — safe to run once.
+-- ============================================================
+alter table public.profiles add column if not exists is_banned boolean not null default false;
+
+create policy "Admins update any profile"
+  on public.profiles
+  for update
+  using (exists (select 1 from public.profiles p where p.user_id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.user_id = auth.uid() and p.is_admin));
+
+-- ============================================================
+-- Profile photos — a Supabase Storage bucket, not a table. Public (read)
+-- because avatars show up on other people's screens (comments, followers,
+-- activity feed) the same way usernames already do; write is locked to a
+-- user's own folder (avatars/{user_id}/...) via the storage.objects RLS
+-- policies below, mirroring every other "own row only" policy in this file.
+-- Purely additive — safe to run once.
+-- ============================================================
+alter table public.profiles add column if not exists avatar_url text;
+
+insert into storage.buckets (id, name, public)
+values ('avatars', 'avatars', true)
+on conflict (id) do nothing;
+
+create policy "Avatar images are publicly readable"
+  on storage.objects
+  for select
+  using (bucket_id = 'avatars');
+
+create policy "Users upload their own avatar"
+  on storage.objects
+  for insert
+  with check (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "Users update their own avatar"
+  on storage.objects
+  for update
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+create policy "Users delete their own avatar"
+  on storage.objects
+  for delete
+  using (bucket_id = 'avatars' and (storage.foldername(name))[1] = auth.uid()::text);
+
+-- ============================================================
+-- Support messages — a general "ask/tell the admins something" channel,
+-- distinct from reports (public.reports): a report always names a specific
+-- piece of content or user to moderate, with a fixed enum of target types;
+-- this is free-form ("the import failed for X", "can you add Y feature"),
+-- with nothing to attach it to. Mirrors the reports table's admin-facing
+-- shape (status + resolution_note + resolved_by) so app/admin/index.tsx's
+-- moderation-console patterns extend to it directly. Purely additive — safe
+-- to run once.
+-- ============================================================
+create type support_status as enum ('open', 'resolved');
+
+create table if not exists public.support_messages (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users (id) on delete cascade,
+  body text not null check (char_length(trim(body)) between 1 and 2000),
+  status support_status not null default 'open',
+  resolution_note text,
+  resolved_by uuid references auth.users (id) on delete set null,
+  created_at timestamptz not null default now(),
+  resolved_at timestamptz
+);
+
+alter table public.support_messages enable row level security;
+
+create policy "Users create their own support messages"
+  on public.support_messages
+  for insert
+  with check (auth.uid() = user_id);
+
+create policy "Users view their own support messages"
+  on public.support_messages
+  for select
+  using (auth.uid() = user_id);
+
+create policy "Admins view all support messages"
+  on public.support_messages
+  for select
+  using (exists (select 1 from public.profiles p where p.user_id = auth.uid() and p.is_admin));
+
+create policy "Admins update support messages"
+  on public.support_messages
+  for update
+  using (exists (select 1 from public.profiles p where p.user_id = auth.uid() and p.is_admin))
+  with check (exists (select 1 from public.profiles p where p.user_id = auth.uid() and p.is_admin));
+
+create index if not exists support_messages_status_idx on public.support_messages (status, created_at desc);
+create index if not exists support_messages_user_idx on public.support_messages (user_id);
+
+-- ============================================================
+-- Badge unlocks — records the moment (device time, on whichever
+-- device/session first notices it) each badge id (see lib/streaks.ts's
+-- Badge.id, e.g. "episodes-100") flips to achieved, so app/streaks.tsx can
+-- show "earned on <date>" instead of just a checkmark. Badges themselves
+-- stay fully recomputed from current totals every visit (cheap, no need to
+-- persist that) — this table only persists the one thing that can't be
+-- recomputed after the fact: *when* a threshold was first crossed. Purely
+-- additive — safe to run once.
+-- ============================================================
+create table if not exists public.badge_unlocks (
+  user_id uuid not null references auth.users (id) on delete cascade,
+  badge_id text not null,
+  earned_at timestamptz not null default now(),
+  primary key (user_id, badge_id)
+);
+
+alter table public.badge_unlocks enable row level security;
+
+create policy "Users view their own badge unlocks"
+  on public.badge_unlocks
+  for select
+  using (auth.uid() = user_id);
+
+create policy "Users insert their own badge unlocks"
+  on public.badge_unlocks
+  for insert
+  with check (auth.uid() = user_id);

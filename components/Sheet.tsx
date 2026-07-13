@@ -1,6 +1,6 @@
 import { ReactNode, useMemo } from "react";
 import { Animated, Pressable, StyleSheet, useWindowDimensions } from "react-native";
-import { useColors, radius, Colors } from "../lib/theme";
+import { useColors, radius, dropShadow, Colors } from "../lib/theme";
 import { useSheetTransition } from "../lib/animations";
 
 const WIDE_BREAKPOINT = 700;
@@ -69,11 +69,7 @@ function createStyles(colors: Colors) {
       maxWidth: 420,
       borderRadius: radius.lg,
       paddingBottom: 16,
-      shadowColor: "#000",
-      shadowOpacity: 0.25,
-      shadowRadius: 24,
-      shadowOffset: { width: 0, height: 8 },
-      elevation: 12,
+      ...dropShadow({ opacity: 0.25, radius: 24, offsetY: 8, elevation: 12 }),
     },
   });
 }

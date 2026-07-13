@@ -56,7 +56,7 @@ export default function NotificationsScreen() {
               style={styles.row}
               onPress={() => item.actor && router.push({ pathname: "/users/[id]", params: { id: item.actor!.user_id } })}
             >
-              <Avatar name={item.actor?.username} size="sm" />
+              <Avatar name={item.actor?.username} imageUri={item.actor?.avatar_url} size="sm" />
               <View style={{ flex: 1 }}>
                 <Text style={styles.text}>
                   <Text style={styles.bold}>{item.actor?.username ?? "?"}</Text> {t.social.startedFollowingYou}

@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { Tabs, useFocusEffect } from "expo-router";
 import { View, Text, Pressable, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
@@ -6,12 +6,16 @@ import { useColors, Colors } from "../../lib/theme";
 import { useLanguage, Translations } from "../../lib/i18n";
 import { useNotifications } from "../../context/NotificationsContext";
 import { useActivityUnseen } from "../../context/ActivityContext";
+import { fetchMyProfile } from "../../lib/profiles";
+import { fetchOpenReportCount } from "../../lib/reports";
+import { fetchOpenSupportMessageCount } from "../../lib/support";
 
 interface TabBarProps {
   state: { routes: { key: string; name: string }[]; index: number };
   navigation: any;
   unreadCount: number;
   hasUnseenActivity: boolean;
+  hasAdminAlerts: boolean;
 }
 
 const ICONS: Record<string, keyof typeof Ionicons.glyphMap> = {
@@ -32,7 +36,7 @@ function tabLabels(t: Translations): Record<string, string> {
   };
 }
 
-function CustomTabBar({ state, navigation, unreadCount, hasUnseenActivity }: TabBarProps) {
+function CustomTabBar({ state, navigation, unreadCount, hasUnseenActivity, hasAdminAlerts }: TabBarProps) {
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useLanguage();
@@ -68,7 +72,7 @@ function CustomTabBar({ state, navigation, unreadCount, hasUnseenActivity }: Tab
           >
             <View>
               <Ionicons name={ICONS[route.name]} size={22} color={color} />
-              {route.name === "profile" && unreadCount > 0 && <View style={styles.badge} />}
+              {route.name === "profile" && (unreadCount > 0 || hasAdminAlerts) && <View style={styles.badge} />}
               {route.name === "activity" && hasUnseenActivity && <View style={styles.badge} />}
             </View>
             <Text style={[styles.label, { color }]}>{labels[route.name]}</Text>
@@ -85,7 +89,25 @@ export default function TabsLayout() {
   const { t } = useLanguage();
   const { unreadCount, refresh } = useNotifications();
   const { hasUnseen: hasUnseenActivity, refresh: refreshActivity } = useActivityUnseen();
+  const [hasAdminAlerts, setHasAdminAlerts] = useState(false);
   const lastFetchedAt = useRef(0);
+
+  // Only admins ever see this (fetchMyProfile()'s own is_admin check gates
+  // it before either count query fires), so this stays a single cheap
+  // is_admin lookup for every other user. Combines open reports and open
+  // support messages (see app/admin/index.tsx's two queues) into one badge —
+  // this is "something needs your attention," not two separate signals.
+  const refreshAdminAlerts = useCallback(() => {
+    fetchMyProfile().then((profile) => {
+      if (!profile?.is_admin) {
+        setHasAdminAlerts(false);
+        return;
+      }
+      Promise.all([fetchOpenReportCount(), fetchOpenSupportMessageCount()])
+        .then(([reports, support]) => setHasAdminAlerts(reports > 0 || support > 0))
+        .catch(() => {});
+    });
+  }, []);
 
   // (tabs) is one Stack.Screen among several siblings (episode/[id], show/[id],
   // list/[id], users/*, connections/[id], notifications — see app/_layout.tsx),
@@ -104,13 +126,21 @@ export default function TabsLayout() {
       lastFetchedAt.current = now;
       refresh();
       refreshActivity();
-    }, [refresh, refreshActivity])
+      refreshAdminAlerts();
+    }, [refresh, refreshActivity, refreshAdminAlerts])
   );
 
   return (
     <Tabs
       screenOptions={{ headerShown: false }}
-      tabBar={(props) => <CustomTabBar {...(props as any)} unreadCount={unreadCount} hasUnseenActivity={hasUnseenActivity} />}
+      tabBar={(props) => (
+        <CustomTabBar
+          {...(props as any)}
+          unreadCount={unreadCount}
+          hasUnseenActivity={hasUnseenActivity}
+          hasAdminAlerts={hasAdminAlerts}
+        />
+      )}
     >
       <Tabs.Screen name="index" options={{ title: t.tabs.shows }} />
       <Tabs.Screen name="movies" options={{ title: t.tabs.movies }} />

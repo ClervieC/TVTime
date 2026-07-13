@@ -6,7 +6,7 @@ import { Ionicons } from "@expo/vector-icons";
 import Swipeable from "react-native-gesture-handler/ReanimatedSwipeable";
 import type { SwipeableMethods } from "react-native-gesture-handler/lib/typescript/components/ReanimatedSwipeable/ReanimatedSwipeableProps";
 import Reanimated, { useAnimatedStyle, type SharedValue } from "react-native-reanimated";
-import { useColors, radius, type, Colors } from "../lib/theme";
+import { useColors, radius, type, dropShadow, Colors } from "../lib/theme";
 import { useLanguage } from "../lib/i18n";
 import { useScalePress, useFlashPulse } from "../lib/animations";
 import { WatchedCheck } from "./WatchedCheck";
@@ -146,29 +146,25 @@ export const EpisodeRow = memo(function EpisodeRow({
           {!!totalEpisodes && (
             <Text style={styles.positionRemaining}>{t.episodeRow.totalEpisodes(totalEpisodes)}</Text>
           )}
+          {!dimmed && isPremiere && (
+            <Pill size="sm" uppercase color={colors.badgePremiere} textColor="#fff">
+              {t.episodeRow.premiere}
+            </Pill>
+          )}
+          {!dimmed && isNew && (
+            <Pill size="sm" uppercase color={colors.badgeNew} textColor={colors.onAccent}>
+              {t.episodeRow.new}
+            </Pill>
+          )}
+          {!dimmed && hasAired && (
+            <Pill size="sm" uppercase color={colors.badgeAired} textColor="#fff">
+              {t.episodeRow.aired}
+            </Pill>
+          )}
         </View>
         <Text style={[styles.episodeTitle, dimmed && styles.textDimmed]} numberOfLines={1}>
           {title}
         </Text>
-        {!dimmed && (
-          <View style={styles.badgeRow}>
-            {isPremiere && (
-              <Pill size="sm" uppercase color={colors.badgePremiere} textColor="#fff">
-                {t.episodeRow.premiere}
-              </Pill>
-            )}
-            {isNew && (
-              <Pill size="sm" uppercase color={colors.badgeNew} textColor={colors.onAccent}>
-                {t.episodeRow.new}
-              </Pill>
-            )}
-            {hasAired && (
-              <Pill size="sm" uppercase color={colors.badgeAired} textColor="#fff">
-                {t.episodeRow.aired}
-              </Pill>
-            )}
-          </View>
-        )}
       </View>
 
       {daysAway !== undefined ? (
@@ -204,8 +200,7 @@ export const EpisodeRow = memo(function EpisodeRow({
         />
       )}
       <Animated.View
-        pointerEvents="none"
-        style={[styles.flashOverlay, { backgroundColor: colors.green, opacity: flashOpacity }]}
+        style={[styles.flashOverlay, { backgroundColor: colors.green, opacity: flashOpacity, pointerEvents: "none" }]}
       />
       </Animated.View>
     </Pressable>
@@ -233,11 +228,7 @@ function createStyles(colors: Colors) {
       borderRadius: radius.md,
       overflow: "hidden",
       marginBottom: 12,
-      shadowColor: "#000",
-      shadowOpacity: 0.06,
-      shadowRadius: 6,
-      shadowOffset: { width: 0, height: 2 },
-      elevation: 1,
+      ...dropShadow({ opacity: 0.06, radius: 6, offsetY: 2, elevation: 1 }),
     },
     flashOverlay: { position: "absolute", top: 0, left: 0, right: 0, bottom: 0 },
     swipeAction: {
@@ -250,7 +241,7 @@ function createStyles(colors: Colors) {
       gap: 4,
     },
     swipeActionText: { color: "#fff", fontSize: 11, fontWeight: "800", textAlign: "center" },
-    rowDimmed: { backgroundColor: "transparent", shadowOpacity: 0 },
+    rowDimmed: { backgroundColor: "transparent", ...dropShadow({ opacity: 0, radius: 0 }) },
     thumbWrap: { width: 88, alignSelf: "stretch", position: "relative" },
     thumb: { width: "100%", height: "100%", backgroundColor: colors.backgroundAlt },
     thumbDimmed: { opacity: 0.45 },
@@ -261,11 +252,14 @@ function createStyles(colors: Colors) {
     // you are in it, and how much is left — the episode's own title is
     // secondary and shown smaller below.
     showNameMain: { color: colors.text, fontSize: type.body, fontWeight: "800" },
-    positionRow: { flexDirection: "row", alignItems: "baseline", gap: 8, marginTop: 1 },
+    // flexWrap so code + remaining-count + a badge don't clip/overlap on a
+    // narrow screen — wraps to a second line instead. alignItems: "center"
+    // rather than "baseline" since the badge Pills are Views, not Text, and
+    // have no baseline to align against.
+    positionRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 6, marginTop: 1 },
     positionCode: { color: colors.accent, fontSize: 13, fontWeight: "800" },
     positionRemaining: { color: colors.textMuted, fontSize: 11, fontWeight: "700" },
     episodeTitle: { color: colors.textMuted, fontSize: 12, marginTop: 2 },
-    badgeRow: { flexDirection: "row", gap: 6, marginTop: 4 },
     timeCol: { alignItems: "flex-end", justifyContent: "center", paddingRight: 12 },
     time: { fontWeight: "700", fontSize: 12, color: colors.text },
     network: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
