@@ -102,14 +102,27 @@ function computeEnrichedForShow(
 
   // Shows with zero watch history yet are "haven't started" — kept
   // separate from Watch Next so newly-added shows don't crowd it out.
+  // Exception: a true series premiere (S1E1) that just aired gets pinned to
+  // the top of Watch Next for 2 weeks (see the "new pilot" split in the
+  // watchNext/haventStarted memo below) so it isn't missed among shows the
+  // user only added to their backlog long after they aired — after that
+  // window it falls back here like any other not-yet-started show.
   if (watchedList.length === 0) {
+    const isNewPilot =
+      nextEpisode.season === 1 &&
+      nextEpisode.number === 1 &&
+      diffDaysFromToday(nextEpisode.airstamp) >= -13;
     return {
       kind: "notStarted",
       item: {
         show,
         episode: nextEpisode,
         watched: false,
-        totalEpisodes: episodes.length,
+        // Aired-only, not the full series order — a show with 2 of 10
+        // planned episodes out should read "2 episodes", not imply all 10
+        // are already available to watch.
+        totalEpisodes: aired.length,
+        isNew: isNewPilot,
       },
     };
   }
@@ -427,6 +440,12 @@ export default function ShowsScreen() {
   const listRef = useRef<FlatList<WatchListRow>>(null);
   const upcomingListRef = useRef<FlatList<UpcomingRow>>(null);
   const hasLoadedOnce = useRef(false);
+  // Guards against overlapping loadData() runs (focus + an explicit
+  // goToWatchList/goToUpcoming call both fire it, and TVmaze's rate limiter
+  // can make one run take far longer than another started after it) — every
+  // flush() checks this before writing, so a slow/stale run's late-arriving
+  // data can never stomp a newer run's already-applied results.
+  const loadGenerationRef = useRef(0);
   // Mirrors `tracked` so loadData (whose deps are intentionally empty, see
   // below) can seed a reload from whatever's already on screen without
   // depending on — and re-creating itself on every change of — tracked.
@@ -510,6 +529,9 @@ export default function ShowsScreen() {
   }
 
   const loadData = useCallback(async () => {
+    const myGeneration = ++loadGenerationRef.current;
+    setLoadGeneration(myGeneration);
+
     if (!hasLoadedOnce.current) {
       setLoading(true);
     }
@@ -524,7 +546,6 @@ export default function ShowsScreen() {
     setHistoryOffset(0);
     setHasMoreHistory(true);
     setUpcomingPastDays(UPCOMING_INITIAL_PAST_DAYS);
-    setLoadGeneration((g) => g + 1);
     // The FlatLists below remount at offset 0 on every load (see loadGeneration
     // in their key), but these refs weren't reset with them — leaving a stale
     // scroll position from before the refresh made onWatchListScroll think it
@@ -567,6 +588,11 @@ export default function ShowsScreen() {
     let flushScheduled = false;
     function flush() {
       flushScheduled = false;
+      // A newer loadData() run has since started — this run's data is
+      // stale (possibly still catching up behind TVmaze's rate limiter),
+      // so applying it now would stomp whatever the newer run already
+      // painted. See loadGenerationRef.
+      if (loadGenerationRef.current !== myGeneration) return;
       setTracked(currentList());
       setLoading(false);
       // Only the very first flush needs to tell the root splash screen it
@@ -589,6 +615,7 @@ export default function ShowsScreen() {
     // same as "empty snapshot" anyway, there's no upside to writing zero
     // shows — only the risk of clobbering a real snapshot with it.
     function persistSnapshot() {
+      if (loadGenerationRef.current !== myGeneration) return;
       const toSave = currentList();
       if (toSave.length === 0) return;
       saveWatchingSnapshot(toSave.map(toSnapshotShow));
@@ -902,7 +929,16 @@ export default function ShowsScreen() {
       return bTime - aTime;
     });
 
-    return { watchNext: started, haventStarted: notStarted };
+    // Newly-aired pilots (see isNewPilot in computeEnrichedForShow) go above
+    // everything else in Watch Next, most recently aired first — the rest of
+    // the not-started shows stay in the haven't-started bucket as before.
+    const newPilots = notStarted.filter((item) => item.isNew);
+    const stillNotStarted = notStarted.filter((item) => !item.isNew);
+    newPilots.sort(
+      (a, b) => new Date(b.episode.airstamp).getTime() - new Date(a.episode.airstamp).getTime(),
+    );
+
+    return { watchNext: [...newPilots, ...started], haventStarted: stillNotStarted };
   }, [tracked, feelingPromptItem]);
 
   const upcoming = useMemo<EnrichedEpisode[]>(() => {
