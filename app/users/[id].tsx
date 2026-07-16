@@ -1,5 +1,14 @@
-import { useCallback, useMemo, useState } from "react";
-import { View, Text, Pressable, ScrollView, ActivityIndicator, StyleSheet } from "react-native";
+import { useCallback, useMemo, useRef, useState } from "react";
+import {
+  View,
+  Text,
+  Pressable,
+  ScrollView,
+  Animated,
+  ActivityIndicator,
+  StyleSheet,
+  useWindowDimensions,
+} from "react-native";
 import { useLocalSearchParams, useRouter, useFocusEffect } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useColors, radius, type, Colors } from "../../lib/theme";
@@ -45,6 +54,21 @@ export default function UserProfileScreen() {
   const colors = useColors();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const { t } = useLanguage();
+
+  // Below this height, the fixed avatar/name/pills/follow-button block
+  // (profileHeader) ate too much of the little vertical room there is to
+  // begin with. Rather than just shrinking it outright (see the Profile
+  // tab's own isSmallScreen fix), it collapses away as the user scrolls the
+  // content beneath it, and a compact avatar+name fades in up in the
+  // back/report row to keep that identity visible while taking almost no
+  // space. Larger screens keep the header static, exactly as before.
+  const { height: windowHeight } = useWindowDimensions();
+  const isSmallScreen = windowHeight < 700;
+  const scrollY = useRef(new Animated.Value(0)).current;
+  // Measured once from profileHeader's own natural layout (it varies with
+  // whether the match pills are present) — the collapse animation's height
+  // interpolation needs a concrete start value, not "auto".
+  const [headerHeight, setHeaderHeight] = useState(0);
 
   const [profile, setProfile] = useState<Profile | null>(null);
   const [counts, setCounts] = useState({ followers: 0, following: 0 });
@@ -161,12 +185,42 @@ export default function UserProfileScreen() {
     );
   }
 
+  // Full fade-out/collapse finishes at 100px of scroll regardless of the
+  // header's actual measured height — a fixed range reads as consistently
+  // "quick" whether the pills are showing or not, rather than a taller
+  // header (more content to scroll past) also taking longer to collapse.
+  const collapseRange = 100;
+  const headerOpacity = scrollY.interpolate({
+    inputRange: [0, collapseRange * 0.6],
+    outputRange: [1, 0],
+    extrapolate: "clamp",
+  });
+  const headerAnimatedHeight = scrollY.interpolate({
+    inputRange: [0, collapseRange],
+    outputRange: [headerHeight, 0],
+    extrapolate: "clamp",
+  });
+  const compactOpacity = scrollY.interpolate({
+    inputRange: [collapseRange * 0.5, collapseRange],
+    outputRange: [0, 1],
+    extrapolate: "clamp",
+  });
+
   return (
     <View style={styles.container}>
-      <View style={styles.header}>
+      <View style={[styles.header, isSmallScreen && styles.headerSmallScreen]}>
         <Pressable onPress={goBack} hitSlop={10} accessibilityRole="button" accessibilityLabel="Back">
           <Ionicons name="chevron-back" size={24} color={colors.text} />
         </Pressable>
+        {isSmallScreen && (
+          <Animated.View style={[styles.compactHeaderInfo, { opacity: compactOpacity }]}>
+            <Avatar name={profile.username} imageUri={profile.avatar_url} size="sm" />
+            <Text style={styles.compactUsername} numberOfLines={1}>
+              {profile.username}
+            </Text>
+            <FollowButton following={isFollowing} loading={busy} onPress={toggleFollow} />
+          </Animated.View>
+        )}
         <Pressable
           onPress={() => setReporting(true)}
           hitSlop={10}
@@ -175,6 +229,15 @@ export default function UserProfileScreen() {
         >
           <Ionicons name="flag-outline" size={20} color={colors.textFaint} />
         </Pressable>
+        {isSmallScreen && (
+          // Only actually needed once the compact bar is what's pinned at
+          // the top (profileHeader's own border below serves that purpose
+          // until then) — faded in with the same compactOpacity rather than
+          // a plain static border, so it doesn't show as a stray line under
+          // the back/report row before there's anything compact to separate
+          // from the content yet.
+          <Animated.View style={[styles.headerDivider, { opacity: compactOpacity }]} />
+        )}
       </View>
       <ReportModal
         visible={reporting}
@@ -182,19 +245,55 @@ export default function UserProfileScreen() {
         target={{ targetType: "user", targetUserId: profile.user_id }}
       />
 
-      <View style={styles.profileHeader}>
-        <Avatar name={profile.username} imageUri={profile.avatar_url} size="lg" />
-        <Text style={styles.username}>{profile.username}</Text>
-        {(match || movieMatch) && (
-          <View style={styles.matchRow}>
-            {match && <Pill tone="accent">{t.activity.sharedShows(match.shared, match.percent)}</Pill>}
-            {movieMatch && <Pill tone="accent">{t.activity.sharedMovies(movieMatch.shared, movieMatch.percent)}</Pill>}
-          </View>
-        )}
-        <FollowButton following={isFollowing} loading={busy} onPress={toggleFollow} />
-      </View>
+      {isSmallScreen ? (
+        <Animated.View
+          style={{ height: headerHeight ? headerAnimatedHeight : undefined, overflow: "hidden" }}
+        >
+          <Animated.View
+            style={[styles.profileHeader, { opacity: headerOpacity }]}
+            // Not "lock on first measurement" — profileHeader's natural
+            // height grows once the match pills row appears (match/
+            // movieMatch resolve asynchronously, after this already had its
+            // first layout pass with neither one yet). Locking to that
+            // earlier, shorter height clipped the follow button clean off
+            // the bottom once the pills pushed everything else down.
+            onLayout={(e) => {
+              const h = e.nativeEvent.layout.height;
+              setHeaderHeight((prev) => (Math.abs(prev - h) > 1 ? h : prev));
+            }}
+          >
+            <Avatar name={profile.username} imageUri={profile.avatar_url} size="lg" />
+            <Text style={styles.username}>{profile.username}</Text>
+            {(match || movieMatch) && (
+              <View style={styles.matchRow}>
+                {match && <Pill tone="accent">{t.activity.sharedShows(match.shared, match.percent)}</Pill>}
+                {movieMatch && <Pill tone="accent">{t.activity.sharedMovies(movieMatch.shared, movieMatch.percent)}</Pill>}
+              </View>
+            )}
+            <FollowButton following={isFollowing} loading={busy} onPress={toggleFollow} />
+          </Animated.View>
+        </Animated.View>
+      ) : (
+        <View style={styles.profileHeader}>
+          <Avatar name={profile.username} imageUri={profile.avatar_url} size="lg" />
+          <Text style={styles.username}>{profile.username}</Text>
+          {(match || movieMatch) && (
+            <View style={styles.matchRow}>
+              {match && <Pill tone="accent">{t.activity.sharedShows(match.shared, match.percent)}</Pill>}
+              {movieMatch && <Pill tone="accent">{t.activity.sharedMovies(movieMatch.shared, movieMatch.percent)}</Pill>}
+            </View>
+          )}
+          <FollowButton following={isFollowing} loading={busy} onPress={toggleFollow} />
+        </View>
+      )}
 
-      <ScrollView showsVerticalScrollIndicator={false}>
+      <Animated.ScrollView
+        showsVerticalScrollIndicator={false}
+        onScroll={Animated.event([{ nativeEvent: { contentOffset: { y: scrollY } } }], {
+          useNativeDriver: false,
+        })}
+        scrollEventThrottle={16}
+      >
         <View style={styles.followRow}>
           <Pressable
             style={styles.followStat}
@@ -295,7 +394,7 @@ export default function UserProfileScreen() {
             ))
           )}
         </ScrollView>
-      </ScrollView>
+      </Animated.ScrollView>
     </View>
   );
 }
@@ -352,6 +451,33 @@ function createStyles(colors: Colors) {
       justifyContent: "space-between",
       paddingHorizontal: 16,
       paddingTop: 16,
+    },
+    // The small-screen compact identity that fades in between the back and
+    // report buttons as profileHeader collapses away on scroll (see
+    // isSmallScreen in the component) — top-left within the row, not
+    // centered, so it reads as "the same info, just smaller" rather than a
+    // whole new centered header competing with the one collapsing above it.
+    compactHeaderInfo: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      // Centered as a group in the space between the back/report buttons —
+      // left-aligned (the default) put it right up against the back button
+      // instead of reading as a balanced, centered mini version of the full
+      // header above it.
+      justifyContent: "center",
+      gap: 10,
+      marginHorizontal: 12,
+    },
+    compactUsername: { fontSize: type.body, fontWeight: "800", color: colors.text, flexShrink: 1 },
+    headerSmallScreen: { paddingBottom: 14 },
+    headerDivider: {
+      position: "absolute",
+      left: 0,
+      right: 0,
+      bottom: 0,
+      height: StyleSheet.hairlineWidth,
+      backgroundColor: colors.border,
     },
     // The fixed part of the screen (this + the back/report row above it) —
     // a bottom border here (not on followRow, which now scrolls with the
